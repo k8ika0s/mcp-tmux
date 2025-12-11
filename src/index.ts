@@ -36,6 +36,8 @@ type TmuxPane = {
 };
 
 const tmuxBinary = process.env.TMUX_BIN || 'tmux';
+const tmuxFallbackPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
+const extraPath = tmuxFallbackPaths.join(':');
 let defaultHost = process.env.MCP_TMUX_HOST || undefined;
 let defaultSession = process.env.MCP_TMUX_SESSION || undefined;
 let defaultWindow: string | undefined;
@@ -53,9 +55,14 @@ You are connected to a tmux MCP server. Use these tools to collaborate with a hu
 
 async function runTmux(args: string[], host?: string) {
   try {
+    const basePath = process.env.PATH ? `${process.env.PATH}:${extraPath}` : extraPath;
     const command = host ? 'ssh' : tmuxBinary;
-    const commandArgs = host ? ['-T', host, tmuxBinary, ...args] : args;
-    const { stdout } = await execa(command, commandArgs);
+    const commandArgs = host
+      ? ['-T', host, 'env', `PATH=${basePath}`, tmuxBinary, ...args]
+      : args;
+    const { stdout } = await execa(command, commandArgs, {
+      env: host ? undefined : { ...process.env, PATH: basePath },
+    });
     return stdout.trim();
   } catch (error) {
     const err = error as { stderr?: string; stdout?: string; message: string };

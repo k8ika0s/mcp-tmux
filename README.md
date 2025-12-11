@@ -108,6 +108,7 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - `MCP_TMUX_SESSION`: Prefer this session when no explicit target is provided.
 - `MCP_TMUX_HOST`: Preferred ssh host alias when no explicit host is provided.
 - `TMUX_BIN`: Path to the tmux binary (defaults to `tmux`).
+- PATH fallbacks: the server automatically adds `/opt/homebrew/bin:/usr/local/bin:/usr/bin` when invoking tmux (local or remote) so Homebrew installs are found.
 
 ## Safety notes
 - The server never bypasses tmux permissions; it inherits your user account and socket access.
