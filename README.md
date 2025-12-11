@@ -30,11 +30,11 @@
 
 ---
 
-mcp-tmux keeps LLMs grounded in reality instead of guessing which pane they are in. It boots or reattaches SSH-backed tmux sessions, injects keystrokes deliberately, captures scrollback on demand, and keeps defaults so the model doesn’t wander. State is pulled fresh instead of hallucinated.
+mcp-tmux is a Model Context Protocol server for people who learned the hard way that large language models are extremely confident about terminals they cannot actually see. It lets an LLM operate inside tmux with real, inspectable state instead of vibes, screenshots, or remembered lies. The server anchors the model to concrete reality: SSH-aware session discovery and bootstrapping, authoritative window and pane topology, and pull-based state snapshots so context is fetched when needed rather than hallucinated continuously. It can spawn or reattach to remote tmux sessions via your SSH config, inject keystrokes into the correct pane on purpose, read scrollback with full historical context, manage windows and splits deterministically, and enforce defaults so the model doesn’t calmly execute commands in a pane that stopped existing five minutes ago.
 
-If you want an AI pair in real terminals—debugging live systems, automating repeatable chores, or co-driving without handing over unlimited shell access—this gives you a precise, observable control surface.
+You need this if you want an LLM to assist in real terminals without pretending the terminal is a chat log. This is for pairing with an AI on live systems, debugging multi-pane chaos, automating the boring parts while you handle the judgment calls, or letting a model help without giving it omnipotent shell access and hoping nothing exciting happens. mcp-tmux exists to replace guesswork with state, narration with observation, and “I think you’re in the left pane” with provable fact.
 
-> Guardrails exist (confirm flags, logging, defaults). Sharp edges also exist. Pair responsibly.
+> Disclaimer: reasonable engineering effort has been applied to reduce the probability of reality-ending command execution. Guardrails exist. So do sharp edges. If something catastrophic happens, it will almost certainly be because a human approved it, ignored context, or decided this was a good idea at the time. Logs are kept. History remembers. Responsibility remains firmly biological.
 
 ## Quickstart (2 minutes)
 1) Install & build:
