@@ -616,6 +616,11 @@ async function fanoutSendCapture({
   capture = true,
   captureLines = 200,
   delayMs = 0,
+  mode = 'send_capture',
+  pattern,
+  patternFlags,
+  tailIterations = 3,
+  tailIntervalMs = 1000,
 }: {
   targets: { host?: string; target?: string; captureLines?: number; delayMs?: number }[];
   keys: string;
@@ -623,6 +628,11 @@ async function fanoutSendCapture({
   capture?: boolean;
   captureLines?: number;
   delayMs?: number;
+  mode?: 'send_capture' | 'tail' | 'pattern';
+  pattern?: string;
+  patternFlags?: string;
+  tailIterations?: number;
+  tailIntervalMs?: number;
 }) {
   const results = await Promise.allSettled(
     targets.map(async (t) => {
@@ -631,19 +641,37 @@ async function fanoutSendCapture({
       if (!paneTarget) {
         throw new McpError(ErrorCode.InvalidParams, 'target is required (or set default pane)');
       }
+      const sessionForLog = getSessionFromTarget(paneTarget);
       await sendKeys(paneTarget, keys, enter, resolvedHost);
-      await auditLog(resolvedHost, getSessionFromTarget(paneTarget), 'multi_run.send_keys', {
+      await auditLog(resolvedHost, sessionForLog, 'multi_run.send_keys', {
         target: paneTarget,
         keys,
         enter,
+        mode,
       });
       if (delayMs && delayMs > 0) {
         await new Promise((r) => setTimeout(r, delayMs));
       }
       let output = '';
-      if (capture) {
+      if (mode === 'tail') {
+        output = await tailPane({
+          host: resolvedHost,
+          target: paneTarget,
+          lines: t.captureLines ?? captureLines,
+          iterations: tailIterations,
+          intervalMs: tailIntervalMs,
+        });
+      } else if (mode === 'pattern') {
+        const regex = new RegExp(pattern ?? '.*', patternFlags);
+        const capture = await capturePane(paneTarget, -(t.captureLines ?? captureLines), undefined, resolvedHost);
+        if (regex.test(capture)) {
+          output = `Pattern matched.\n${capture}`;
+        } else {
+          output = `Pattern not found.\n${capture}`;
+        }
+      } else if (capture) {
         output = await capturePane(paneTarget, -(t.captureLines ?? captureLines), undefined, resolvedHost);
-        await auditLog(resolvedHost, getSessionFromTarget(paneTarget), 'multi_run.capture', {
+        await auditLog(resolvedHost, sessionForLog, 'multi_run.capture', {
           target: paneTarget,
           length: output.length,
         });
@@ -1145,10 +1173,42 @@ async function main() {
         capture: z.boolean().describe('Capture after sending.').default(true).optional(),
         captureLines: z.number().describe('Default lines to capture (per-target override available).').default(200).optional(),
         delayMs: z.number().describe('Default delay before capture in ms (per-target override available).').default(0).optional(),
+        mode: z
+          .enum(['send_capture', 'tail', 'pattern'])
+          .describe('send_capture (default) captures once, tail polls, pattern checks for regex.')
+          .optional(),
+        pattern: z.string().describe('Regex pattern when mode=pattern.').optional(),
+        patternFlags: z.string().describe('Regex flags (e.g., i)').optional(),
+        tailIterations: z.number().describe('Tail iterations (mode=tail).').default(3).optional(),
+        tailIntervalMs: z.number().describe('Tail interval ms (mode=tail).').default(1000).optional(),
       },
     },
-    async ({ targets, keys, enter = true, capture = true, captureLines = 200, delayMs = 0 }) => {
-      const text = await fanoutSendCapture({ targets, keys, enter, capture, captureLines, delayMs });
+    async ({
+      targets,
+      keys,
+      enter = true,
+      capture = true,
+      captureLines = 200,
+      delayMs = 0,
+      mode = 'send_capture',
+      pattern,
+      patternFlags,
+      tailIterations = 3,
+      tailIntervalMs = 1000,
+    }) => {
+      const text = await fanoutSendCapture({
+        targets,
+        keys,
+        enter,
+        capture,
+        captureLines,
+        delayMs,
+        mode,
+        pattern,
+        patternFlags,
+        tailIterations,
+        tailIntervalMs,
+      });
       return { content: [{ type: 'text', text }] };
     },
   );

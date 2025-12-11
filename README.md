@@ -63,7 +63,7 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.health`: Quick health check (tmux reachable, session listing, host profile info).
 - `tmux.context_history`: Pull recent scrollback (pane or session) and extract recent commands.
 - `tmux.quickstart`: Return a concise playbook/do-don’t block for the LLM.
-- `tmux.multi_run`: Fan-out send + optional capture to multiple hosts/panes.
+- `tmux.multi_run`: Fan-out send + capture/tail/pattern to multiple hosts/panes.
 - Resource: `tmux.state_resource` (URI `tmux://state/default`) returns the current default snapshot on read.
 - Logging: session logs are appended under `~/.config/mcp-tmux/logs/{host}/{session}/YYYY-MM-DD.log` (override with `MCP_TMUX_LOG_DIR`).
 - Audit logging: enable per-session via `tmux.set_audit_logging` to log commands and outputs verbosely (may grow large).
@@ -119,11 +119,14 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
       {"host":"web-2","target":"ops:0.0"}
     ],
     "keys":"ls -lah /var/log && tail -n 50 app.log",
+    "mode":"send_capture",
     "capture":true,
     "captureLines":200,
     "delayMs":500
   }}
   ```
+  - Tail mode: set `"mode":"tail"` with `tailIterations`/`tailIntervalMs`.
+  - Pattern mode: set `"mode":"pattern"` with `pattern`/`patternFlags`.
 - Capture context history and recent commands:
   ```json
   {"name":"tmux.context_history","arguments":{"session":"collab","lines":800,"allPanes":true}}
