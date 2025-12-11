@@ -523,6 +523,31 @@ function extractRecentCommands(text: string, max = 15) {
   return cmds.reverse();
 }
 
+const auditFlags: Record<string, boolean> = {};
+
+function auditKey(host?: string, session?: string) {
+  return `${host ?? defaultHost ?? 'local'}:${session ?? defaultSession ?? 'unknown'}`;
+}
+
+function isAuditEnabled(host?: string, session?: string) {
+  return Boolean(auditFlags[auditKey(host, session)]);
+}
+
+function setAuditEnabled(host: string | undefined, session: string | undefined, enabled: boolean) {
+  auditFlags[auditKey(host, session)] = enabled;
+}
+
+async function auditLog(host: string | undefined, session: string | undefined, event: string, meta?: unknown) {
+  if (!isAuditEnabled(host, session)) return;
+  const h = host ?? defaultHost ?? 'local';
+  const s = session ?? defaultSession ?? 'unknown';
+  const dir = path.join(logBaseDir, h, s);
+  const file = path.join(dir, `audit-${isoTimestamp().slice(0, 10)}.log`);
+  await fs.mkdir(dir, { recursive: true });
+  const line = `[${isoTimestamp()}] ${event}${meta !== undefined ? ` ${JSON.stringify(meta)}` : ''}\n`;
+  await fs.appendFile(file, line);
+}
+
 function getSessionFromTarget(target: string | undefined) {
   if (!target) return defaultSession;
   const parts = target.split(':');
@@ -854,7 +879,13 @@ async function main() {
       parts.push(history.commands.join('\n') || '(none)');
       parts.push('');
       parts.push(defaultTargetNote());
-      await appendSessionLog(resolveHost(host), session ?? getSessionFromTarget(target), 'context_history captured');
+      const sessForLog = session ?? getSessionFromTarget(target);
+      await appendSessionLog(resolveHost(host), sessForLog, 'context_history captured');
+      await auditLog(resolveHost(host), sessForLog, 'context_history', {
+        lines,
+        allPanes,
+        targets: history.captures.map((c) => c.target),
+      });
       return { content: [{ type: 'text', text: parts.join('\n') }] };
     },
   );
@@ -883,6 +914,37 @@ async function main() {
         defaultTargetNote(),
       ].join('\n');
       return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.set_audit_logging',
+    {
+      title: 'Set audit logging',
+      description: 'Enable or disable verbose audit logging for a host/session (logs commands and outputs).',
+      inputSchema: {
+        host: z.string().describe('Host alias (optional). Uses default host if set.').optional(),
+        session: z.string().describe('Session name (optional). Uses default session if set.').optional(),
+        enabled: z.boolean().describe('Set to true to enable audit logging, false to disable.'),
+      },
+    },
+    async ({ host, session, enabled }) => {
+      const resolvedSession = session ?? defaultSession;
+      if (!resolvedSession) {
+        throw new McpError(ErrorCode.InvalidParams, 'session is required when no default session is set');
+      }
+      setAuditEnabled(host, resolvedSession, enabled);
+      await appendSessionLog(resolveHost(host), resolvedSession, `audit_logging ${enabled ? 'enabled' : 'disabled'}`);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Audit logging ${enabled ? 'enabled' : 'disabled'} for session ${resolvedSession}${
+              host ? ` on ${host}` : ''
+            }.`,
+          },
+        ],
+      };
     },
   );
 
@@ -1306,6 +1368,12 @@ async function main() {
     },
     async ({ target, start, end, host }) => {
       const output = await capturePane(target, start, end, resolveHost(host));
+      await auditLog(resolveHost(host), getSessionFromTarget(target), 'capture_pane', {
+        target,
+        start,
+        end,
+        length: output.length,
+      });
       return {
         content: [{ type: 'text', text: output || '(empty pane)' }],
       };
@@ -1328,6 +1396,7 @@ async function main() {
       const resolvedHost = resolveHost(host);
       await sendKeys(target, keys, enter, resolvedHost);
       await log('debug', `send-keys to ${target}${resolvedHost ? ` on ${resolvedHost}` : ''}: "${keys}"`);
+      await auditLog(resolvedHost, getSessionFromTarget(target), 'send_keys', { target, keys, enter });
       await appendSessionLog(resolvedHost, getSessionFromTarget(target), `send-keys "${keys}" enter=${enter}`);
       return {
         content: [{ type: 'text', text: `Sent keys to ${target}${enter ? ' (with Enter)' : ''}.` }],
@@ -1554,8 +1623,13 @@ async function main() {
           'confirm=true is required for destructive tmux.command calls (kill*, unlink, attach -k)',
         );
       }
-      const output = await runTmux(args, resolveHost(host));
+      const resolvedHost = resolveHost(host);
+      const output = await runTmux(args, resolvedHost);
       await log('info', `command: tmux ${args.join(' ')}`);
+      await auditLog(resolvedHost, defaultSession, 'tmux.command', {
+        args,
+        outputLength: output.length,
+      });
       return {
         content: [{ type: 'text', text: output || '(no output)' }],
       };

@@ -65,6 +65,7 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.quickstart`: Return a concise playbook/do-don’t block for the LLM.
 - Resource: `tmux.state_resource` (URI `tmux://state/default`) returns the current default snapshot on read.
 - Logging: session logs are appended under `~/.config/mcp-tmux/logs/{host}/{session}/YYYY-MM-DD.log` (override with `MCP_TMUX_LOG_DIR`).
+- Audit logging: enable per-session via `tmux.set_audit_logging` to log commands and outputs verbosely (may grow large).
 - `tmux.list_sessions`: Enumerate sessions with window/attach counts.
 - `tmux.list_windows`: List windows (optionally scoped to a session).
 - `tmux.list_panes`: List panes (optionally scoped to a target).
