@@ -551,6 +551,20 @@ async function captureHistory({
   return { captures, commands: extractRecentCommands(combinedText) };
 }
 
+async function listDirSimple(dir: string, host?: string) {
+  if (host) {
+    const { stdout } = await execa('ssh', ['-T', host, 'ls', '-1', dir]);
+    return stdout.split('\n').filter(Boolean);
+  }
+  const entries = await fs.readdir(dir);
+  return entries.sort();
+}
+
+export function diffNewFiles(prev: string[], next: string[]) {
+  const prevSet = new Set(prev);
+  return next.filter((f) => !prevSet.has(f));
+}
+
 async function saveLayoutProfile(name: string, session: string, host?: string) {
   const windows = await captureLayouts(session, host);
   layoutProfiles[name] = {
@@ -958,6 +972,120 @@ async function main() {
       },
     } as any,
   );
+
+  server.experimental.tasks.registerToolTask(
+    'tmux.watch_dir_task',
+    {
+      title: 'Watch a directory for new files',
+      description: 'Poll a directory (local or via SSH) and complete when new files appear or after max iterations.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional).').optional(),
+        path: z.string().describe('Directory to watch.').default('.').optional(),
+        intervalMs: z.number().describe('Polling interval ms.').default(2000).optional(),
+        iterations: z.number().describe('Max polling iterations.').default(10).optional(),
+      },
+      outputSchema: undefined,
+    } as any,
+    {
+      async createTask({ host, path = '.', intervalMs = 2000, iterations = 10 }: any, { taskStore }: any) {
+        const task = await taskStore.createTask({});
+        (async () => {
+          let prev = await listDirSimple(path, host);
+          for (let i = 0; i < iterations; i++) {
+            await new Promise((r) => setTimeout(r, intervalMs));
+            const curr = await listDirSimple(path, host);
+            const added = diffNewFiles(prev, curr);
+            prev = curr;
+            if (added.length) {
+              await taskStore.storeTaskResult(task.taskId, 'completed', {
+                content: [
+                  {
+                    type: 'text',
+                    text: `New files detected in ${path}${host ? ` on ${host}` : ''}:\n${added.join('\n')}`,
+                  },
+                ],
+              });
+              return;
+            }
+          }
+          await taskStore.storeTaskResult(task.taskId, 'completed', {
+            content: [
+              {
+                type: 'text',
+                text: `No new files detected in ${path}${host ? ` on ${host}` : ''} after ${iterations} checks.`,
+              },
+            ],
+          });
+        })();
+        return { task };
+      },
+      async getTask(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTask(taskId);
+      },
+      async getTaskResult(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTaskResult(taskId);
+      },
+    } as any,
+  );
+
+  server.experimental.tasks.registerToolTask(
+    'tmux.wait_for_pattern_task',
+    {
+      title: 'Wait for output pattern',
+      description: 'Poll a pane for a regex pattern and complete when matched or after iterations.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target to watch (pane id or session:window.pane).'),
+        pattern: z.string().describe('Regex pattern to search for.'),
+        flags: z.string().describe('Regex flags (e.g., i)').optional(),
+        lines: z.number().describe('Lines per fetch.').default(400).optional(),
+        intervalMs: z.number().describe('Delay between polls in milliseconds.').default(1500).optional(),
+        iterations: z.number().describe('Max polling iterations.').default(8).optional(),
+      },
+      outputSchema: undefined,
+    } as any,
+    {
+      async createTask(
+        { host, target, pattern, flags, lines = 400, intervalMs = 1500, iterations = 8 }: any,
+        { taskStore }: any,
+      ) {
+        const task = await taskStore.createTask({});
+        (async () => {
+          const resolvedHost = resolveHost(host);
+          const regex = new RegExp(pattern, flags);
+          for (let i = 0; i < iterations; i++) {
+            const capture = await capturePane(target, -lines, undefined, resolvedHost);
+            if (regex.test(capture)) {
+              await taskStore.storeTaskResult(task.taskId, 'completed', {
+                content: [{ type: 'text', text: `Pattern matched on iteration ${i + 1}.\n${capture}` }],
+              });
+              return;
+            }
+            if (i < iterations - 1) {
+              await new Promise((r) => setTimeout(r, intervalMs));
+            }
+          }
+          const finalCapture = await capturePane(target, -lines, undefined, resolvedHost);
+          await taskStore.storeTaskResult(task.taskId, 'completed', {
+            content: [
+              {
+                type: 'text',
+                text: `Pattern not found after ${iterations} checks.\nLast capture:\n${finalCapture}`,
+              },
+            ],
+          });
+        })();
+        return { task };
+      },
+      async getTask(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTask(taskId);
+      },
+      async getTaskResult(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTaskResult(taskId);
+      },
+    } as any,
+  );
+
 
   server.registerTool(
     'tmux.select_window',
