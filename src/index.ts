@@ -43,12 +43,21 @@ const extraPath = tmuxFallbackPaths.join(':');
 const hostProfilePath =
   process.env.MCP_TMUX_HOSTS_FILE ||
   path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'hosts.json');
+const layoutProfilePath = path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'layouts.json');
 let hostProfiles: Record<
   string,
   {
     pathAdd?: string[];
     tmuxBin?: string;
     defaultSession?: string;
+  }
+> = {};
+let layoutProfiles: Record<
+  string,
+  {
+    host?: string;
+    session: string;
+    windows: { index: number; name: string; layout: string }[];
   }
 > = {};
 let defaultHost = process.env.MCP_TMUX_HOST || undefined;
@@ -387,6 +396,28 @@ async function loadHostProfiles() {
   }
 }
 
+async function loadLayoutProfiles() {
+  try {
+    const data = await fs.readFile(layoutProfilePath, 'utf8');
+    const parsed = JSON.parse(data) as typeof layoutProfiles;
+    layoutProfiles = parsed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`Failed to read layout profile file at ${layoutProfilePath}:`, error);
+    }
+    layoutProfiles = {};
+  }
+}
+
+async function persistLayouts() {
+  try {
+    await fs.mkdir(path.dirname(layoutProfilePath), { recursive: true });
+    await fs.writeFile(layoutProfilePath, JSON.stringify(layoutProfiles, null, 2), 'utf8');
+  } catch (error) {
+    console.warn(`Failed to persist layout profiles to ${layoutProfilePath}:`, error);
+  }
+}
+
 async function buildStateSnapshot({
   host,
   session,
@@ -470,8 +501,51 @@ async function tailPane({
   return lastCapture.trim();
 }
 
+async function saveLayoutProfile(name: string, session: string, host?: string) {
+  const windows = await captureLayouts(session, host);
+  layoutProfiles[name] = {
+    host,
+    session,
+    windows,
+  };
+  await persistLayouts();
+}
+
+async function applyLayoutProfile(name: string, targetSession?: string, host?: string) {
+  const profile = layoutProfiles[name];
+  if (!profile) {
+    throw new McpError(ErrorCode.InvalidParams, `No layout profile named '${name}' found.`);
+  }
+  const resolvedHost = resolveHost(host) ?? profile.host;
+  const session = targetSession ?? profile.session;
+  for (const w of profile.windows) {
+    const windowTarget = `${session}:${w.index}`;
+    try {
+      await applyLayout(windowTarget, w.layout, resolvedHost);
+    } catch (error) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to apply layout to ${windowTarget}: ${(error as Error).message}`,
+      );
+    }
+  }
+}
+
+async function selectWindow(target: string, host?: string) {
+  await runTmux(['select-window', '-t', target], host);
+}
+
+async function selectPane(target: string, host?: string) {
+  await runTmux(['select-pane', '-t', target], host);
+}
+
+async function setSyncPanes(target: string, on: boolean, host?: string) {
+  await runTmux(['set-window-option', '-t', target, 'synchronize-panes', on ? 'on' : 'off'], host);
+}
+
 async function main() {
   await loadHostProfiles();
+  await loadLayoutProfiles();
   await ensureLocalTmuxAvailable();
 
   const server = new McpServer(
@@ -485,6 +559,7 @@ async function main() {
       capabilities: {
         tools: {},
         logging: {},
+        resources: {},
       },
       instructions,
     },
@@ -680,6 +755,132 @@ async function main() {
     async ({ host, target, lines = 200, iterations = 3, intervalMs = 1000 }) => {
       const tailText = await tailPane({ host, target, lines, iterations, intervalMs });
       return { content: [{ type: 'text', text: tailText || '(no output)' }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.select_window',
+    {
+      title: 'Focus a window',
+      description: 'Select a window so subsequent commands target it.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Window target (session:window or window id).'),
+      },
+    },
+    async ({ host, target }) => {
+      await selectWindow(target, resolveHost(host));
+      await log('info', `selected window ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Selected window ${target}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.select_pane',
+    {
+      title: 'Focus a pane',
+      description: 'Select a pane so subsequent commands target it.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target (pane id or session:window.pane).'),
+      },
+    },
+    async ({ host, target }) => {
+      await selectPane(target, resolveHost(host));
+      await log('info', `selected pane ${target}${host ? ` on ${host}` : ''}`);
+      defaultPane = target;
+      return { content: [{ type: 'text', text: `Selected pane ${target}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.set_sync_panes',
+    {
+      title: 'Toggle synchronize-panes',
+      description: 'Enable or disable synchronize-panes for a window.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Window target (session:window or window id).'),
+        on: z.boolean().describe('Whether to enable synchronize-panes.'),
+      },
+    },
+    async ({ host, target, on }) => {
+      await setSyncPanes(target, on, resolveHost(host));
+      await log('info', `sync-panes ${on ? 'on' : 'off'} for ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `sync-panes ${on ? 'enabled' : 'disabled'} on ${target}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.save_layout_profile',
+    {
+      title: 'Save a layout profile',
+      description: 'Capture layouts for all windows in a session and store them under a profile name.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z.string().describe('Session to capture (optional, uses default session).').optional(),
+        name: z.string().describe('Profile name to store.'),
+      },
+    },
+    async ({ host, session, name }) => {
+      const resolvedSession = requireSession(session);
+      await saveLayoutProfile(name, resolvedSession, resolveHost(host));
+      return { content: [{ type: 'text', text: `Saved layout profile '${name}' for session ${resolvedSession}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.apply_layout_profile',
+    {
+      title: 'Apply a saved layout profile',
+      description:
+        'Apply a previously saved layout profile to a session. Windows are matched by index; pane counts must be compatible.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z
+          .string()
+          .describe('Session to apply to (optional; uses saved session from profile if omitted).')
+          .optional(),
+        name: z.string().describe('Profile name to load.'),
+      },
+    },
+    async ({ host, session, name }) => {
+      await applyLayoutProfile(name, session, resolveHost(host));
+      await log('info', `applied layout profile ${name}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Applied layout profile '${name}'.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.health',
+    {
+      title: 'Health check',
+      description: 'Check tmux availability, PATH/bin resolution, and session listing for a host.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+      },
+    },
+    async ({ host }) => {
+      const resolvedHost = resolveHost(host);
+      const results: string[] = [];
+      try {
+        await runTmux(['-V'], resolvedHost);
+        results.push('tmux -V: ok');
+      } catch (error) {
+        throw new McpError(
+          ErrorCode.InternalError,
+          `tmux not reachable on ${resolvedHost ?? 'local'}: ${(error as Error).message}`,
+        );
+      }
+      try {
+        const sessions = await listSessions(resolvedHost);
+        results.push(`sessions: ${sessions.length}`);
+      } catch (error) {
+        results.push(`sessions: failed (${(error as Error).message})`);
+      }
+      const hostCfg = getHostProfile(resolvedHost);
+      results.push(`host profile: ${hostCfg ? JSON.stringify(hostCfg) : 'none'}`);
+      return { content: [{ type: 'text', text: results.join('\n') }] };
     },
   );
 

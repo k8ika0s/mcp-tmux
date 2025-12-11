@@ -56,6 +56,10 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.set_default` / `tmux.get_default`: Persist or view default host/session/window/pane.
 - `tmux.capture_layout` / `tmux.restore_layout`: Save and re-apply window layouts.
 - `tmux.tail_pane`: Poll a pane repeatedly to follow output without reissuing commands.
+- `tmux.select_window` / `tmux.select_pane`: Change focus targets explicitly.
+- `tmux.set_sync_panes`: Toggle synchronize-panes for a window.
+- `tmux.save_layout_profile` / `tmux.apply_layout_profile`: Persist and re-apply layout profiles by name.
+- `tmux.health`: Quick health check (tmux reachable, session listing, host profile info).
 - `tmux.list_sessions`: Enumerate sessions with window/attach counts.
 - `tmux.list_windows`: List windows (optionally scoped to a session).
 - `tmux.list_panes`: List panes (optionally scoped to a target).
@@ -96,10 +100,25 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
   ```json
   {"name":"tmux.tail_pane","arguments":{"target":"collab:0.0","lines":200,"iterations":3,"intervalMs":1000}}
   ```
+- Select window/pane and toggle sync:
+  ```json
+  {"name":"tmux.select_window","arguments":{"target":"collab:0"}}
+  {"name":"tmux.select_pane","arguments":{"target":"collab:0.1"}}
+  {"name":"tmux.set_sync_panes","arguments":{"target":"collab:0","on":true}}
+  ```
 - Capture and restore layouts:
   ```json
   {"name":"tmux.capture_layout","arguments":{"session":"collab"}}
   {"name":"tmux.restore_layout","arguments":{"target":"collab:0","layout":"your-layout-string"}}
+  ```
+- Save/apply layout profiles:
+  ```json
+  {"name":"tmux.save_layout_profile","arguments":{"session":"collab","name":"logs"}}
+  {"name":"tmux.apply_layout_profile","arguments":{"name":"logs"}}
+  ```
+- Health check:
+  ```json
+  {"name":"tmux.health","arguments":{"host":"my-ssh-alias"}}
   ```
 - Split a pane and label it:
   ```json
@@ -126,6 +145,7 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
     "hashimac": { "pathAdd": ["/opt/homebrew/bin"], "tmuxBin": "/opt/homebrew/bin/tmux", "defaultSession": "ka0s" }
   }
   ```
+- Layout profiles (optional): stored at `~/.config/mcp-tmux/layouts.json` by default via `tmux.save_layout_profile`/`tmux.apply_layout_profile`.
 
 ## Safety notes
 - The server never bypasses tmux permissions; it inherits your user account and socket access.
