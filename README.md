@@ -1,7 +1,7 @@
 # mcp-tmux
 
 [![CI](https://github.com/k8ika0s/mcp-tmux/actions/workflows/ci.yml/badge.svg)](https://github.com/k8ika0s/mcp-tmux/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D18-blue.svg)](https://nodejs.org)
 
 mcp-tmux is a Model Context Protocol server that lets an LLM co-drive tmux alongside a human, with remote SSH-aware session bootstrapping, safety rails, and pull-based state snapshots. The server can create or reconnect to a remote tmux session via your SSH config, send keys, read scrollback, manage windows/panes, and keep defaults so the model doesn’t get lost. Destructive actions require explicit confirmation, and logging is emitted back to the client for observability.
@@ -154,4 +154,4 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - Linting/formatting: not configured; keep patches small and readable.
 
 ## License
-MIT
+AGPL-3.0-only
