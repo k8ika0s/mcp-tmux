@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
 import { execa } from 'execa';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { InMemoryTaskStore, InMemoryTaskMessageQueue } from '@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js';
 
 type TmuxSession = {
   id: string;
@@ -36,10 +39,39 @@ type TmuxPane = {
 };
 
 const tmuxBinary = process.env.TMUX_BIN || 'tmux';
+const tmuxFallbackPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
+const extraPath = tmuxFallbackPaths.join(':');
+const hostProfilePath =
+  process.env.MCP_TMUX_HOSTS_FILE ||
+  path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'hosts.json');
+const logBaseDir =
+  process.env.MCP_TMUX_LOG_DIR || path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'logs');
+const layoutProfilePath = path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'layouts.json');
+let hostProfiles: Record<
+  string,
+  {
+    pathAdd?: string[];
+    tmuxBin?: string;
+    defaultSession?: string;
+  }
+> = {};
+let layoutProfiles: Record<
+  string,
+  {
+    host?: string;
+    session: string;
+    windows: { index: number; name: string; layout: string }[];
+  }
+> = {};
 let defaultHost = process.env.MCP_TMUX_HOST || undefined;
 let defaultSession = process.env.MCP_TMUX_SESSION || undefined;
 let defaultWindow: string | undefined;
 let defaultPane: string | undefined;
+const defaultTargetNote = () =>
+  `Defaults -> host: ${defaultHost ?? '(unset)'}, session: ${defaultSession ?? '(unset)'}, pane: ${
+    defaultPane ?? '(unset)'
+  }`;
+const isoTimestamp = () => new Date().toISOString();
 
 const instructions = `
 You are connected to a tmux MCP server. Use these tools to collaborate with a human inside tmux.
@@ -49,13 +81,21 @@ You are connected to a tmux MCP server. Use these tools to collaborate with a hu
 - Remote: provide host (ssh alias) + session or set MCP_TMUX_HOST/MCP_TMUX_SESSION. Server runs tmux via ssh -T <host> tmux ....
 - Safety: destructive tools require confirm=true; prefer tmux.command only when helpers don’t cover it.
 - After sending keys, always capture-pane to read output; re-list panes/windows to stay in sync.
+- Helpers: tmux.tail_pane (poll output), tmux.capture_layout/tmux.restore_layout (save/apply layouts), host profiles via MCP_TMUX_HOSTS_FILE for per-host PATH/tmux bin defaults.
+- Fanout: tmux.multi_run to send the same command to multiple hosts/panes and aggregate results.
 `.trim();
 
 async function runTmux(args: string[], host?: string) {
   try {
-    const command = host ? 'ssh' : tmuxBinary;
-    const commandArgs = host ? ['-T', host, tmuxBinary, ...args] : args;
-    const { stdout } = await execa(command, commandArgs);
+    const hostConfig = getHostProfile(host);
+    const bin = hostConfig?.tmuxBin || tmuxBinary;
+    const pathAdd = hostConfig?.pathAdd ?? [];
+    const basePath = buildPath(process.env.PATH, [...tmuxFallbackPaths, ...pathAdd]);
+    const command = host ? 'ssh' : bin;
+    const commandArgs = host ? ['-T', host, 'env', `PATH=${basePath}`, bin, ...args] : args;
+    const { stdout } = await execa(command, commandArgs, {
+      env: host ? undefined : { ...process.env, PATH: basePath },
+    });
     return stdout.trim();
   } catch (error) {
     const err = error as { stderr?: string; stdout?: string; message: string };
@@ -336,6 +376,57 @@ function formatPanes(panes: TmuxPane[]) {
     .join('\n');
 }
 
+function getHostProfile(host?: string) {
+  if (!host) return undefined;
+  return hostProfiles[host];
+}
+
+export function buildPath(current: string | undefined, additions: string[]) {
+  const parts = current ? current.split(':') : [];
+  for (const entry of additions) {
+    if (!entry) continue;
+    if (!parts.includes(entry)) {
+      parts.push(entry);
+    }
+  }
+  return parts.join(':');
+}
+
+async function loadHostProfiles() {
+  try {
+    const data = await fs.readFile(hostProfilePath, 'utf8');
+    const parsed = JSON.parse(data) as typeof hostProfiles;
+    hostProfiles = parsed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`Failed to read host profile file at ${hostProfilePath}:`, error);
+    }
+    hostProfiles = {};
+  }
+}
+
+async function loadLayoutProfiles() {
+  try {
+    const data = await fs.readFile(layoutProfilePath, 'utf8');
+    const parsed = JSON.parse(data) as typeof layoutProfiles;
+    layoutProfiles = parsed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`Failed to read layout profile file at ${layoutProfilePath}:`, error);
+    }
+    layoutProfiles = {};
+  }
+}
+
+async function persistLayouts() {
+  try {
+    await fs.mkdir(path.dirname(layoutProfilePath), { recursive: true });
+    await fs.writeFile(layoutProfilePath, JSON.stringify(layoutProfiles, null, 2), 'utf8');
+  } catch (error) {
+    console.warn(`Failed to persist layout profiles to ${layoutProfilePath}:`, error);
+  }
+}
+
 async function buildStateSnapshot({
   host,
   session,
@@ -378,7 +469,286 @@ async function buildStateSnapshot({
   };
 }
 
+async function captureLayouts(session: string, host?: string) {
+  const fmt = '#{window_id}\t#{window_layout}\t#{window_name}\t#{window_index}';
+  const output = await runTmux(['list-windows', '-t', session, '-F', fmt], host);
+  return output
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [id, layout, name, index] = line.split('\t');
+      return { id, layout, name, index: Number(index) };
+    });
+}
+
+async function applyLayout(target: string, layout: string, host?: string) {
+  await runTmux(['select-layout', '-t', target, layout], host);
+}
+
+async function tailPane({
+  host,
+  target,
+  lines,
+  iterations,
+  intervalMs,
+}: {
+  host?: string;
+  target: string;
+  lines: number;
+  iterations: number;
+  intervalMs: number;
+}) {
+  const resolvedHost = resolveHost(host);
+  let lastCapture = '';
+  for (let i = 0; i < iterations; i++) {
+    lastCapture += `\n--- tail iteration ${i + 1}/${iterations} ---\n`;
+    lastCapture += await capturePane(target, -lines, undefined, resolvedHost);
+    if (i < iterations - 1) {
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+  return lastCapture.trim();
+}
+
+function extractRecentCommands(text: string, max = 15) {
+  const cmds: string[] = [];
+  const lines = text.split('\n');
+  const promptPattern = /[$#>] ([^\s].*)$/;
+  for (let i = lines.length - 1; i >= 0 && cmds.length < max; i--) {
+    const line = lines[i];
+    const match = line.match(promptPattern);
+    if (match && match[1]) {
+      cmds.push(match[1]);
+    }
+  }
+  return cmds.reverse();
+}
+
+const auditFlags: Record<string, boolean> = {};
+
+function auditKey(host?: string, session?: string) {
+  return `${host ?? defaultHost ?? 'local'}:${session ?? defaultSession ?? 'unknown'}`;
+}
+
+function isAuditEnabled(host?: string, session?: string) {
+  return Boolean(auditFlags[auditKey(host, session)]);
+}
+
+function setAuditEnabled(host: string | undefined, session: string | undefined, enabled: boolean) {
+  auditFlags[auditKey(host, session)] = enabled;
+}
+
+async function auditLog(host: string | undefined, session: string | undefined, event: string, meta?: unknown) {
+  if (!isAuditEnabled(host, session)) return;
+  const h = host ?? defaultHost ?? 'local';
+  const s = session ?? defaultSession ?? 'unknown';
+  const dir = path.join(logBaseDir, h, s);
+  const file = path.join(dir, `audit-${isoTimestamp().slice(0, 10)}.log`);
+  await fs.mkdir(dir, { recursive: true });
+  const line = `[${isoTimestamp()}] ${event}${meta !== undefined ? ` ${JSON.stringify(meta)}` : ''}\n`;
+  await fs.appendFile(file, line);
+}
+
+function getSessionFromTarget(target: string | undefined) {
+  if (!target) return defaultSession;
+  const parts = target.split(':');
+  return parts[0] || defaultSession;
+}
+
+async function appendSessionLog(host: string | undefined, session: string | undefined, message: string) {
+  const h = host ?? defaultHost ?? 'local';
+  const s = session ?? defaultSession ?? 'unknown';
+  const dir = path.join(logBaseDir, h, s);
+  const file = path.join(dir, `${isoTimestamp().slice(0, 10)}.log`);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.appendFile(file, `[${isoTimestamp()}] ${message}\n`);
+}
+
+async function captureHistory({
+  host,
+  session,
+  target,
+  lines = 800,
+  allPanes = false,
+}: {
+  host?: string;
+  session?: string;
+  target?: string;
+  lines?: number;
+  allPanes?: boolean;
+}) {
+  const resolvedHost = resolveHost(host);
+  if (target) {
+    const capture = await capturePane(target, -lines, undefined, resolvedHost);
+    return { captures: [{ target, text: capture }], commands: extractRecentCommands(capture) };
+  }
+  const resolvedSession = requireSession(session);
+  const panes = await listPanes(resolvedSession, resolvedHost);
+  const targets = allPanes ? panes : panes.filter((p) => p.active);
+  const captures = await Promise.all(
+    targets.map(async (p) => ({
+      target: `${p.session}:${p.window}.${p.index}`,
+      text: await capturePane(p.id, -lines, undefined, resolvedHost),
+    })),
+  );
+  const combinedText = captures.map((c) => c.text).join('\n');
+  return { captures, commands: extractRecentCommands(combinedText) };
+}
+
+async function listDirSimple(dir: string, host?: string) {
+  if (host) {
+    const { stdout } = await execa('ssh', ['-T', host, 'ls', '-1', dir]);
+    return stdout.split('\n').filter(Boolean);
+  }
+  const entries = await fs.readdir(dir);
+  return entries.sort();
+}
+
+export function diffNewFiles(prev: string[], next: string[]) {
+  const prevSet = new Set(prev);
+  return next.filter((f) => !prevSet.has(f));
+}
+
+async function fanoutSendCapture({
+  targets,
+  keys,
+  enter,
+  capture = true,
+  captureLines = 200,
+  delayMs = 0,
+  mode = 'send_capture',
+  pattern,
+  patternFlags,
+  tailIterations = 3,
+  tailIntervalMs = 1000,
+}: {
+  targets: { host?: string; target?: string; captureLines?: number; delayMs?: number }[];
+  keys: string;
+  enter: boolean;
+  capture?: boolean;
+  captureLines?: number;
+  delayMs?: number;
+  mode?: 'send_capture' | 'tail' | 'pattern';
+  pattern?: string;
+  patternFlags?: string;
+  tailIterations?: number;
+  tailIntervalMs?: number;
+}) {
+  const results = await Promise.allSettled(
+    targets.map(async (t) => {
+      const resolvedHost = resolveHost(t.host);
+      const paneTarget = t.target ?? defaultPane;
+      if (!paneTarget) {
+        throw new McpError(ErrorCode.InvalidParams, 'target is required (or set default pane)');
+      }
+      const sessionForLog = getSessionFromTarget(paneTarget);
+      await sendKeys(paneTarget, keys, enter, resolvedHost);
+      await auditLog(resolvedHost, sessionForLog, 'multi_run.send_keys', {
+        target: paneTarget,
+        keys,
+        enter,
+        mode,
+      });
+      if (delayMs && delayMs > 0) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+      let output = '';
+      if (mode === 'tail') {
+        output = await tailPane({
+          host: resolvedHost,
+          target: paneTarget,
+          lines: t.captureLines ?? captureLines,
+          iterations: tailIterations,
+          intervalMs: tailIntervalMs,
+        });
+      } else if (mode === 'pattern') {
+        const regex = new RegExp(pattern ?? '.*', patternFlags);
+        const capture = await capturePane(paneTarget, -(t.captureLines ?? captureLines), undefined, resolvedHost);
+        if (regex.test(capture)) {
+          output = `Pattern matched.\n${capture}`;
+        } else {
+          output = `Pattern not found.\n${capture}`;
+        }
+      } else if (capture) {
+        output = await capturePane(paneTarget, -(t.captureLines ?? captureLines), undefined, resolvedHost);
+        await auditLog(resolvedHost, sessionForLog, 'multi_run.capture', {
+          target: paneTarget,
+          length: output.length,
+        });
+      }
+      return { host: resolvedHost ?? 'local', target: paneTarget, output };
+    }),
+  );
+
+  const lines: string[] = [];
+  let ok = 0;
+  let fail = 0;
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      ok++;
+      lines.push(`== ${r.value.host} ${r.value.target} ==`);
+      if (capture) {
+        lines.push(r.value.output || '(no output)');
+      } else {
+        lines.push('(capture disabled)');
+      }
+    } else {
+      fail++;
+      const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      lines.push(`== error ==`);
+      lines.push(msg);
+    }
+  }
+  lines.push('');
+  lines.push(`Summary: ${ok} succeeded, ${fail} failed`);
+  return lines.join('\n');
+}
+
+async function saveLayoutProfile(name: string, session: string, host?: string) {
+  const windows = await captureLayouts(session, host);
+  layoutProfiles[name] = {
+    host,
+    session,
+    windows,
+  };
+  await persistLayouts();
+}
+
+async function applyLayoutProfile(name: string, targetSession?: string, host?: string) {
+  const profile = layoutProfiles[name];
+  if (!profile) {
+    throw new McpError(ErrorCode.InvalidParams, `No layout profile named '${name}' found.`);
+  }
+  const resolvedHost = resolveHost(host) ?? profile.host;
+  const session = targetSession ?? profile.session;
+  for (const w of profile.windows) {
+    const windowTarget = `${session}:${w.index}`;
+    try {
+      await applyLayout(windowTarget, w.layout, resolvedHost);
+    } catch (error) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to apply layout to ${windowTarget}: ${(error as Error).message}`,
+      );
+    }
+  }
+}
+
+async function selectWindow(target: string, host?: string) {
+  await runTmux(['select-window', '-t', target], host);
+}
+
+async function selectPane(target: string, host?: string) {
+  await runTmux(['select-pane', '-t', target], host);
+}
+
+async function setSyncPanes(target: string, on: boolean, host?: string) {
+  await runTmux(['set-window-option', '-t', target, 'synchronize-panes', on ? 'on' : 'off'], host);
+}
+
 async function main() {
+  await loadHostProfiles();
+  await loadLayoutProfiles();
   await ensureLocalTmuxAvailable();
 
   const server = new McpServer(
@@ -392,10 +762,50 @@ async function main() {
       capabilities: {
         tools: {},
         logging: {},
+        resources: {},
+        tasks: {
+          requests: {
+            tools: {
+              call: {},
+            },
+          },
+        },
       },
       instructions,
+      taskStore: new InMemoryTaskStore(),
+      taskMessageQueue: new InMemoryTaskMessageQueue(),
     },
   );
+
+  server.registerResource(
+    'tmux.state_resource',
+    'tmux://state/default',
+    {
+      title: 'Default tmux state snapshot',
+      description: 'On read, captures current default host/session state and recent output.',
+      mimeType: 'text/plain',
+    },
+    async () => {
+      const snapshot = await buildStateSnapshot({ host: defaultHost, session: defaultSession });
+      const text = [
+        `Host: ${snapshot.host}`,
+        `Session: ${snapshot.session}`,
+        `Capture target: ${snapshot.captureTarget ?? '(none)'}`,
+        '',
+        snapshot.sessionsText,
+        '',
+        snapshot.windowsText,
+        '',
+        snapshot.panesText,
+        '',
+        snapshot.capture,
+        '',
+        defaultTargetNote(),
+      ].join('\n');
+      return { contents: [{ uri: 'tmux://state/default', text }] };
+    },
+  );
+
 
   const log = async (
     level: 'info' | 'debug' | 'error' | 'notice' | 'warning' | 'critical' | 'alert' | 'emergency',
@@ -484,6 +894,7 @@ async function main() {
         host ? `Default host: ${host}` : 'Default host: local (no host set)',
         defaultSession ? `Default session: ${defaultSession}` : 'No default session detected.',
         formatSessions(sessions),
+        defaultTargetNote(),
       ].join('\n\n');
 
       return {
@@ -528,8 +939,517 @@ async function main() {
         '',
         `Capture (last ${captureLines ?? 200} lines):`,
         snapshot.capture,
+        '',
+        defaultTargetNote(),
       ].join('\n');
       return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.context_history',
+    {
+      title: 'Capture recent tmux history',
+      description:
+        'Capture recent scrollback from a pane or session to infer context; also extracts recent commands heuristically.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z.string().describe('Session (optional; uses default).').optional(),
+        target: z
+          .string()
+          .describe('Pane target (pane id or session:window.pane). If omitted, uses active panes in session.')
+          .optional(),
+        lines: z.number().describe('How many lines to capture per pane.').default(800).optional(),
+        allPanes: z.boolean().describe('If true, capture all panes in the session.').default(false).optional(),
+      },
+    },
+    async ({ host, session, target, lines = 800, allPanes = false }) => {
+      const history = await captureHistory({ host, session, target, lines, allPanes });
+      const parts: string[] = [];
+      for (const c of history.captures) {
+        parts.push(`--- ${c.target} ---`);
+        parts.push(c.text);
+      }
+      parts.push('');
+      parts.push('Recent commands (heuristic):');
+      parts.push(history.commands.join('\n') || '(none)');
+      parts.push('');
+      parts.push(defaultTargetNote());
+      const sessForLog = session ?? getSessionFromTarget(target);
+      await appendSessionLog(resolveHost(host), sessForLog, 'context_history captured');
+      await auditLog(resolveHost(host), sessForLog, 'context_history', {
+        lines,
+        allPanes,
+        targets: history.captures.map((c) => c.target),
+      });
+      return { content: [{ type: 'text', text: parts.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.quickstart',
+    {
+      title: 'Quickstart instructions',
+      description: 'Returns a concise how-to for using the tmux MCP tools safely.',
+    },
+    async () => {
+      const text = [
+        'Playbook:',
+        '1) tmux.open_session (host+session)',
+        '2) tmux.default_context',
+        '3) tmux.list_windows / tmux.list_panes',
+        '4) tmux.select_window / tmux.select_pane (optional)',
+        '5) tmux.send_keys then tmux.capture_pane (or tmux.tail_pane / tmux.context_history)',
+        '6) Use tmux.capture_layout / tmux.save_layout_profile for layouts; tmux.set_sync_panes when needed.',
+        '',
+        'Safety:',
+        '- Destructive commands require confirm=true.',
+        '- Prefer helper tools over raw tmux.command.',
+        '- Always capture after sending keys; re-list panes/windows to stay in sync.',
+        '',
+        defaultTargetNote(),
+      ].join('\n');
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.set_audit_logging',
+    {
+      title: 'Set audit logging',
+      description: 'Enable or disable verbose audit logging for a host/session (logs commands and outputs).',
+      inputSchema: {
+        host: z.string().describe('Host alias (optional). Uses default host if set.').optional(),
+        session: z.string().describe('Session name (optional). Uses default session if set.').optional(),
+        enabled: z.boolean().describe('Set to true to enable audit logging, false to disable.'),
+      },
+    },
+    async ({ host, session, enabled }) => {
+      const resolvedSession = session ?? defaultSession;
+      if (!resolvedSession) {
+        throw new McpError(ErrorCode.InvalidParams, 'session is required when no default session is set');
+      }
+      setAuditEnabled(host, resolvedSession, enabled);
+      await appendSessionLog(resolveHost(host), resolvedSession, `audit_logging ${enabled ? 'enabled' : 'disabled'}`);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Audit logging ${enabled ? 'enabled' : 'disabled'} for session ${resolvedSession}${
+              host ? ` on ${host}` : ''
+            }.`,
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.capture_layout',
+    {
+      title: 'Capture window layouts',
+      description: 'Return window layouts for a session so they can be restored later.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z.string().describe('Session name (optional, defaults to stored session).').optional(),
+      },
+    },
+    async ({ host, session }) => {
+      const resolvedSession = requireSession(session);
+      const layouts = await captureLayouts(resolvedSession, resolveHost(host));
+      const text = layouts
+        .map((l) => `${resolvedSession}:${l.index} (${l.id}) ${l.name} layout=${l.layout}`)
+        .join('\n');
+      return { content: [{ type: 'text', text: text || '(no windows)' }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.restore_layout',
+    {
+      title: 'Restore a window layout',
+      description: 'Apply a saved layout string to a target window.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Window target (e.g., session:window or window id).'),
+        layout: z.string().describe('Layout string obtained from tmux.capture_layout.'),
+      },
+    },
+    async ({ host, target, layout }) => {
+      await applyLayout(target, layout, resolveHost(host));
+      await log('info', `restored layout on ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Restored layout on ${target}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.tail_pane',
+    {
+      title: 'Tail a pane buffer',
+      description: 'Poll a pane multiple times to watch output without reissuing commands.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target to tail (pane id or session:window.pane).'),
+        lines: z.number().describe('How many lines per fetch.').default(200).optional(),
+        iterations: z.number().describe('How many polling iterations.').default(3).optional(),
+        intervalMs: z.number().describe('Delay between polls in milliseconds.').default(1000).optional(),
+      },
+    },
+    async ({ host, target, lines = 200, iterations = 3, intervalMs = 1000 }) => {
+      const tailText = await tailPane({ host, target, lines, iterations, intervalMs });
+      await appendSessionLog(resolveHost(host), getSessionFromTarget(target), `tail_pane ${target} lines=${lines}`);
+      return { content: [{ type: 'text', text: tailText || '(no output)' }] };
+    },
+  );
+
+  server.experimental.tasks.registerToolTask(
+    'tmux.tail_task',
+    {
+      title: 'Tail a pane (task)',
+      description: 'Create a task to poll pane output over time. Client can poll for incremental results.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target to tail (pane id or session:window.pane).'),
+        lines: z.number().describe('How many lines per fetch.').default(200).optional(),
+        intervalMs: z.number().describe('Delay between polls in milliseconds.').default(1500).optional(),
+        iterations: z.number().describe('How many polling iterations before auto-complete.').default(5).optional(),
+      },
+      outputSchema: undefined,
+    } as any,
+    {
+      async createTask(
+        { host, target, lines = 200, intervalMs = 1500, iterations = 5 }: any,
+        { taskStore }: any,
+      ) {
+        const task = await taskStore.createTask({});
+        (async () => {
+          const resolvedHost = resolveHost(host);
+          const parts: string[] = [];
+          for (let i = 0; i < iterations; i++) {
+            const capture = await capturePane(target, -lines, undefined, resolvedHost);
+            parts.push(`Iteration ${i + 1}/${iterations}`);
+            parts.push(capture || '(empty)');
+            if (i < iterations - 1) {
+              await new Promise((r) => setTimeout(r, intervalMs));
+            }
+          }
+          const finalCapture = await capturePane(target, -lines, undefined, resolvedHost);
+          parts.push('Final:');
+          parts.push(finalCapture || '(empty)');
+          await taskStore.storeTaskResult(task.taskId, 'completed', {
+            content: [{ type: 'text', text: parts.join('\n') }],
+          });
+        })();
+        return { task };
+      },
+      async getTask(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTask(taskId);
+      },
+      async getTaskResult(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTaskResult(taskId);
+      },
+    } as any,
+  );
+
+  server.registerTool(
+    'tmux.multi_run',
+    {
+      title: 'Fan-out send and capture',
+      description: 'Send the same keys to multiple targets (across hosts) and optionally capture results.',
+      inputSchema: {
+        targets: z
+          .array(
+            z.object({
+              host: z.string().describe('SSH host alias (optional).').optional(),
+              target: z.string().describe('Pane target (pane id or session:window.pane).').optional(),
+              captureLines: z.number().describe('Lines to capture for this target.').optional(),
+              delayMs: z.number().describe('Delay before capture for this target.').optional(),
+            }),
+          )
+          .nonempty()
+          .describe('List of targets to fan-out to.'),
+        keys: z.string().describe('Keys/command to send.'),
+        enter: z.boolean().describe('Append Enter.').default(true).optional(),
+        capture: z.boolean().describe('Capture after sending.').default(true).optional(),
+        captureLines: z.number().describe('Default lines to capture (per-target override available).').default(200).optional(),
+        delayMs: z.number().describe('Default delay before capture in ms (per-target override available).').default(0).optional(),
+        mode: z
+          .enum(['send_capture', 'tail', 'pattern'])
+          .describe('send_capture (default) captures once, tail polls, pattern checks for regex.')
+          .optional(),
+        pattern: z.string().describe('Regex pattern when mode=pattern.').optional(),
+        patternFlags: z.string().describe('Regex flags (e.g., i)').optional(),
+        tailIterations: z.number().describe('Tail iterations (mode=tail).').default(3).optional(),
+        tailIntervalMs: z.number().describe('Tail interval ms (mode=tail).').default(1000).optional(),
+      },
+    },
+    async ({
+      targets,
+      keys,
+      enter = true,
+      capture = true,
+      captureLines = 200,
+      delayMs = 0,
+      mode = 'send_capture',
+      pattern,
+      patternFlags,
+      tailIterations = 3,
+      tailIntervalMs = 1000,
+    }) => {
+      const text = await fanoutSendCapture({
+        targets,
+        keys,
+        enter,
+        capture,
+        captureLines,
+        delayMs,
+        mode,
+        pattern,
+        patternFlags,
+        tailIterations,
+        tailIntervalMs,
+      });
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.experimental.tasks.registerToolTask(
+    'tmux.watch_dir_task',
+    {
+      title: 'Watch a directory for new files',
+      description: 'Poll a directory (local or via SSH) and complete when new files appear or after max iterations.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional).').optional(),
+        path: z.string().describe('Directory to watch.').default('.').optional(),
+        intervalMs: z.number().describe('Polling interval ms.').default(2000).optional(),
+        iterations: z.number().describe('Max polling iterations.').default(10).optional(),
+      },
+      outputSchema: undefined,
+    } as any,
+    {
+      async createTask({ host, path = '.', intervalMs = 2000, iterations = 10 }: any, { taskStore }: any) {
+        const task = await taskStore.createTask({});
+        (async () => {
+          let prev = await listDirSimple(path, host);
+          for (let i = 0; i < iterations; i++) {
+            await new Promise((r) => setTimeout(r, intervalMs));
+            const curr = await listDirSimple(path, host);
+            const added = diffNewFiles(prev, curr);
+            prev = curr;
+            if (added.length) {
+              await taskStore.storeTaskResult(task.taskId, 'completed', {
+                content: [
+                  {
+                    type: 'text',
+                    text: `New files detected in ${path}${host ? ` on ${host}` : ''}:\n${added.join('\n')}`,
+                  },
+                ],
+              });
+              return;
+            }
+          }
+          await taskStore.storeTaskResult(task.taskId, 'completed', {
+            content: [
+              {
+                type: 'text',
+                text: `No new files detected in ${path}${host ? ` on ${host}` : ''} after ${iterations} checks.`,
+              },
+            ],
+          });
+        })();
+        return { task };
+      },
+      async getTask(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTask(taskId);
+      },
+      async getTaskResult(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTaskResult(taskId);
+      },
+    } as any,
+  );
+
+  server.experimental.tasks.registerToolTask(
+    'tmux.wait_for_pattern_task',
+    {
+      title: 'Wait for output pattern',
+      description: 'Poll a pane for a regex pattern and complete when matched or after iterations.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target to watch (pane id or session:window.pane).'),
+        pattern: z.string().describe('Regex pattern to search for.'),
+        flags: z.string().describe('Regex flags (e.g., i)').optional(),
+        lines: z.number().describe('Lines per fetch.').default(400).optional(),
+        intervalMs: z.number().describe('Delay between polls in milliseconds.').default(1500).optional(),
+        iterations: z.number().describe('Max polling iterations.').default(8).optional(),
+      },
+      outputSchema: undefined,
+    } as any,
+    {
+      async createTask(
+        { host, target, pattern, flags, lines = 400, intervalMs = 1500, iterations = 8 }: any,
+        { taskStore }: any,
+      ) {
+        const task = await taskStore.createTask({});
+        (async () => {
+          const resolvedHost = resolveHost(host);
+          const regex = new RegExp(pattern, flags);
+          for (let i = 0; i < iterations; i++) {
+            const capture = await capturePane(target, -lines, undefined, resolvedHost);
+            if (regex.test(capture)) {
+              await taskStore.storeTaskResult(task.taskId, 'completed', {
+                content: [{ type: 'text', text: `Pattern matched on iteration ${i + 1}.\n${capture}` }],
+              });
+              return;
+            }
+            if (i < iterations - 1) {
+              await new Promise((r) => setTimeout(r, intervalMs));
+            }
+          }
+          const finalCapture = await capturePane(target, -lines, undefined, resolvedHost);
+          await taskStore.storeTaskResult(task.taskId, 'completed', {
+            content: [
+              {
+                type: 'text',
+                text: `Pattern not found after ${iterations} checks.\nLast capture:\n${finalCapture}`,
+              },
+            ],
+          });
+        })();
+        return { task };
+      },
+      async getTask(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTask(taskId);
+      },
+      async getTaskResult(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTaskResult(taskId);
+      },
+    } as any,
+  );
+
+
+  server.registerTool(
+    'tmux.select_window',
+    {
+      title: 'Focus a window',
+      description: 'Select a window so subsequent commands target it.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Window target (session:window or window id).'),
+      },
+    },
+    async ({ host, target }) => {
+      await selectWindow(target, resolveHost(host));
+      await log('info', `selected window ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Selected window ${target}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.select_pane',
+    {
+      title: 'Focus a pane',
+      description: 'Select a pane so subsequent commands target it.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target (pane id or session:window.pane).'),
+      },
+    },
+    async ({ host, target }) => {
+      await selectPane(target, resolveHost(host));
+      await log('info', `selected pane ${target}${host ? ` on ${host}` : ''}`);
+      defaultPane = target;
+      return { content: [{ type: 'text', text: `Selected pane ${target}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.set_sync_panes',
+    {
+      title: 'Toggle synchronize-panes',
+      description: 'Enable or disable synchronize-panes for a window.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Window target (session:window or window id).'),
+        on: z.boolean().describe('Whether to enable synchronize-panes.'),
+      },
+    },
+    async ({ host, target, on }) => {
+      await setSyncPanes(target, on, resolveHost(host));
+      await log('info', `sync-panes ${on ? 'on' : 'off'} for ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `sync-panes ${on ? 'enabled' : 'disabled'} on ${target}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.save_layout_profile',
+    {
+      title: 'Save a layout profile',
+      description: 'Capture layouts for all windows in a session and store them under a profile name.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z.string().describe('Session to capture (optional, uses default session).').optional(),
+        name: z.string().describe('Profile name to store.'),
+      },
+    },
+    async ({ host, session, name }) => {
+      const resolvedSession = requireSession(session);
+      await saveLayoutProfile(name, resolvedSession, resolveHost(host));
+      return { content: [{ type: 'text', text: `Saved layout profile '${name}' for session ${resolvedSession}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.apply_layout_profile',
+    {
+      title: 'Apply a saved layout profile',
+      description:
+        'Apply a previously saved layout profile to a session. Windows are matched by index; pane counts must be compatible.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z
+          .string()
+          .describe('Session to apply to (optional; uses saved session from profile if omitted).')
+          .optional(),
+        name: z.string().describe('Profile name to load.'),
+      },
+    },
+    async ({ host, session, name }) => {
+      await applyLayoutProfile(name, session, resolveHost(host));
+      await log('info', `applied layout profile ${name}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Applied layout profile '${name}'.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.health',
+    {
+      title: 'Health check',
+      description: 'Check tmux availability, PATH/bin resolution, and session listing for a host.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+      },
+    },
+    async ({ host }) => {
+      const resolvedHost = resolveHost(host);
+      const results: string[] = [];
+      try {
+        await runTmux(['-V'], resolvedHost);
+        results.push('tmux -V: ok');
+      } catch (error) {
+        throw new McpError(
+          ErrorCode.InternalError,
+          `tmux not reachable on ${resolvedHost ?? 'local'}: ${(error as Error).message}`,
+        );
+      }
+      try {
+        const sessions = await listSessions(resolvedHost);
+        results.push(`sessions: ${sessions.length}`);
+      } catch (error) {
+        results.push(`sessions: failed (${(error as Error).message})`);
+      }
+      const hostCfg = getHostProfile(resolvedHost);
+      results.push(`host profile: ${hostCfg ? JSON.stringify(hostCfg) : 'none'}`);
+      return { content: [{ type: 'text', text: results.join('\n') }] };
     },
   );
 
@@ -606,6 +1526,12 @@ async function main() {
     },
     async ({ target, start, end, host }) => {
       const output = await capturePane(target, start, end, resolveHost(host));
+      await auditLog(resolveHost(host), getSessionFromTarget(target), 'capture_pane', {
+        target,
+        start,
+        end,
+        length: output.length,
+      });
       return {
         content: [{ type: 'text', text: output || '(empty pane)' }],
       };
@@ -628,6 +1554,8 @@ async function main() {
       const resolvedHost = resolveHost(host);
       await sendKeys(target, keys, enter, resolvedHost);
       await log('debug', `send-keys to ${target}${resolvedHost ? ` on ${resolvedHost}` : ''}: "${keys}"`);
+      await auditLog(resolvedHost, getSessionFromTarget(target), 'send_keys', { target, keys, enter });
+      await appendSessionLog(resolvedHost, getSessionFromTarget(target), `send-keys "${keys}" enter=${enter}`);
       return {
         content: [{ type: 'text', text: `Sent keys to ${target}${enter ? ' (with Enter)' : ''}.` }],
       };
@@ -853,8 +1781,13 @@ async function main() {
           'confirm=true is required for destructive tmux.command calls (kill*, unlink, attach -k)',
         );
       }
-      const output = await runTmux(args, resolveHost(host));
+      const resolvedHost = resolveHost(host);
+      const output = await runTmux(args, resolvedHost);
       await log('info', `command: tmux ${args.join(' ')}`);
+      await auditLog(resolvedHost, defaultSession, 'tmux.command', {
+        args,
+        outputLength: output.length,
+      });
       return {
         content: [{ type: 'text', text: output || '(no output)' }],
       };

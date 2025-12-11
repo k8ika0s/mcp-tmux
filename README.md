@@ -1,7 +1,7 @@
 # mcp-tmux
 
 [![CI](https://github.com/k8ika0s/mcp-tmux/actions/workflows/ci.yml/badge.svg)](https://github.com/k8ika0s/mcp-tmux/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D18-blue.svg)](https://nodejs.org)
 
 mcp-tmux is a Model Context Protocol server that lets an LLM co-drive tmux alongside a human, with remote SSH-aware session bootstrapping, safety rails, and pull-based state snapshots. The server can create or reconnect to a remote tmux session via your SSH config, send keys, read scrollback, manage windows/panes, and keep defaults so the model doesn’t get lost. Destructive actions require explicit confirmation, and logging is emitted back to the client for observability.
@@ -54,6 +54,19 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.default_context`: Shows detected default session and a quick session listing.
 - `tmux.state`: Snapshot sessions, windows, panes, and capture of the active/default pane.
 - `tmux.set_default` / `tmux.get_default`: Persist or view default host/session/window/pane.
+- `tmux.capture_layout` / `tmux.restore_layout`: Save and re-apply window layouts.
+- `tmux.tail_pane`: Poll a pane repeatedly to follow output without reissuing commands.
+- `tmux.tail_task`: Task-based tail with polling over time (client polls task results).
+- `tmux.select_window` / `tmux.select_pane`: Change focus targets explicitly.
+- `tmux.set_sync_panes`: Toggle synchronize-panes for a window.
+- `tmux.save_layout_profile` / `tmux.apply_layout_profile`: Persist and re-apply layout profiles by name.
+- `tmux.health`: Quick health check (tmux reachable, session listing, host profile info).
+- `tmux.context_history`: Pull recent scrollback (pane or session) and extract recent commands.
+- `tmux.quickstart`: Return a concise playbook/do-don’t block for the LLM.
+- `tmux.multi_run`: Fan-out send + capture/tail/pattern to multiple hosts/panes.
+- Resource: `tmux.state_resource` (URI `tmux://state/default`) returns the current default snapshot on read.
+- Logging: session logs are appended under `~/.config/mcp-tmux/logs/{host}/{session}/YYYY-MM-DD.log` (override with `MCP_TMUX_LOG_DIR`).
+- Audit logging: enable per-session via `tmux.set_audit_logging` to log commands and outputs verbosely (may grow large).
 - `tmux.list_sessions`: Enumerate sessions with window/attach counts.
 - `tmux.list_windows`: List windows (optionally scoped to a session).
 - `tmux.list_panes`: List panes (optionally scoped to a target).
@@ -90,6 +103,58 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
   {"name":"tmux.send_keys","arguments":{"target":"collab:0.0","keys":"ls -lah","enter":true}}
   {"name":"tmux.capture_pane","arguments":{"target":"collab:0.0","start":-200}}
   ```
+- Tail a pane to watch output:
+  ```json
+  {"name":"tmux.tail_pane","arguments":{"target":"collab:0.0","lines":200,"iterations":3,"intervalMs":1000}}
+  ```
+- Tail via task (poll results):
+  ```json
+  {"name":"tmux.tail_task","arguments":{"target":"collab:0.0","lines":200,"iterations":5,"intervalMs":1500}}
+  ```
+- Fan-out to multiple hosts/panes:
+  ```json
+  {"name":"tmux.multi_run","arguments":{
+    "targets":[
+      {"host":"web-1","target":"ops:0.0"},
+      {"host":"web-2","target":"ops:0.0"}
+    ],
+    "keys":"ls -lah /var/log && tail -n 50 app.log",
+    "mode":"send_capture",
+    "capture":true,
+    "captureLines":200,
+    "delayMs":500
+  }}
+  ```
+  - Tail mode: set `"mode":"tail"` with `tailIterations`/`tailIntervalMs`.
+  - Pattern mode: set `"mode":"pattern"` with `pattern`/`patternFlags`.
+- Capture context history and recent commands:
+  ```json
+  {"name":"tmux.context_history","arguments":{"session":"collab","lines":800,"allPanes":true}}
+  ```
+- Quickstart playbook for the LLM:
+  ```json
+  {"name":"tmux.quickstart","arguments":{}}
+  ```
+- Select window/pane and toggle sync:
+  ```json
+  {"name":"tmux.select_window","arguments":{"target":"collab:0"}}
+  {"name":"tmux.select_pane","arguments":{"target":"collab:0.1"}}
+  {"name":"tmux.set_sync_panes","arguments":{"target":"collab:0","on":true}}
+  ```
+- Capture and restore layouts:
+  ```json
+  {"name":"tmux.capture_layout","arguments":{"session":"collab"}}
+  {"name":"tmux.restore_layout","arguments":{"target":"collab:0","layout":"your-layout-string"}}
+  ```
+- Save/apply layout profiles:
+  ```json
+  {"name":"tmux.save_layout_profile","arguments":{"session":"collab","name":"logs"}}
+  {"name":"tmux.apply_layout_profile","arguments":{"name":"logs"}}
+  ```
+- Health check:
+  ```json
+  {"name":"tmux.health","arguments":{"host":"my-ssh-alias"}}
+  ```
 - Split a pane and label it:
   ```json
   {"name":"tmux.split_pane","arguments":{"target":"collab:0.0","orientation":"horizontal","command":"htop"}}
@@ -108,6 +173,15 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - `MCP_TMUX_SESSION`: Prefer this session when no explicit target is provided.
 - `MCP_TMUX_HOST`: Preferred ssh host alias when no explicit host is provided.
 - `TMUX_BIN`: Path to the tmux binary (defaults to `tmux`).
+- PATH fallbacks: the server automatically adds `/opt/homebrew/bin:/usr/local/bin:/usr/bin` when invoking tmux (local or remote) so Homebrew installs are found.
+- Host profiles (optional): `MCP_TMUX_HOSTS_FILE` can point to a JSON file like:
+  ```json
+  {
+    "hashimac": { "pathAdd": ["/opt/homebrew/bin"], "tmuxBin": "/opt/homebrew/bin/tmux", "defaultSession": "ka0s" }
+  }
+  ```
+- Layout profiles (optional): stored at `~/.config/mcp-tmux/layouts.json` by default via `tmux.save_layout_profile`/`tmux.apply_layout_profile`.
+- Logging directory: defaults to `~/.config/mcp-tmux/logs` (override with `MCP_TMUX_LOG_DIR`), organized by host/session with daily log files.
 
 ## Safety notes
 - The server never bypasses tmux permissions; it inherits your user account and socket access.
@@ -129,10 +203,11 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - Branch protection (intended): main should be protected (require PR, no branch deletion). Configure this in repository settings.
 - Ownership: CODEOWNERS assigns all files to @k8ika0s.
 - Project stats: TypeScript, Node >=18, publishes `mcp-tmux` CLI entrypoint, MCP stdio server.
+- Tests: `npm test` (vitest) covers helper path composition.
 
 ## Developing
 - TypeScript build: `npm run build`
 - Linting/formatting: not configured; keep patches small and readable.
 
 ## License
-MIT
+AGPL-3.0-only
