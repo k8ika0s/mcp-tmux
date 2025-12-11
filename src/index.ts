@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { execa } from 'execa';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -38,6 +40,17 @@ type TmuxPane = {
 const tmuxBinary = process.env.TMUX_BIN || 'tmux';
 const tmuxFallbackPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
 const extraPath = tmuxFallbackPaths.join(':');
+const hostProfilePath =
+  process.env.MCP_TMUX_HOSTS_FILE ||
+  path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'hosts.json');
+let hostProfiles: Record<
+  string,
+  {
+    pathAdd?: string[];
+    tmuxBin?: string;
+    defaultSession?: string;
+  }
+> = {};
 let defaultHost = process.env.MCP_TMUX_HOST || undefined;
 let defaultSession = process.env.MCP_TMUX_SESSION || undefined;
 let defaultWindow: string | undefined;
@@ -51,15 +64,17 @@ You are connected to a tmux MCP server. Use these tools to collaborate with a hu
 - Remote: provide host (ssh alias) + session or set MCP_TMUX_HOST/MCP_TMUX_SESSION. Server runs tmux via ssh -T <host> tmux ....
 - Safety: destructive tools require confirm=true; prefer tmux.command only when helpers don’t cover it.
 - After sending keys, always capture-pane to read output; re-list panes/windows to stay in sync.
+- Helpers: tmux.tail_pane (poll output), tmux.capture_layout/tmux.restore_layout (save/apply layouts), host profiles via MCP_TMUX_HOSTS_FILE for per-host PATH/tmux bin defaults.
 `.trim();
 
 async function runTmux(args: string[], host?: string) {
   try {
-    const basePath = process.env.PATH ? `${process.env.PATH}:${extraPath}` : extraPath;
-    const command = host ? 'ssh' : tmuxBinary;
-    const commandArgs = host
-      ? ['-T', host, 'env', `PATH=${basePath}`, tmuxBinary, ...args]
-      : args;
+    const hostConfig = getHostProfile(host);
+    const bin = hostConfig?.tmuxBin || tmuxBinary;
+    const pathAdd = hostConfig?.pathAdd ?? [];
+    const basePath = buildPath(process.env.PATH, [...tmuxFallbackPaths, ...pathAdd]);
+    const command = host ? 'ssh' : bin;
+    const commandArgs = host ? ['-T', host, 'env', `PATH=${basePath}`, bin, ...args] : args;
     const { stdout } = await execa(command, commandArgs, {
       env: host ? undefined : { ...process.env, PATH: basePath },
     });
@@ -343,6 +358,35 @@ function formatPanes(panes: TmuxPane[]) {
     .join('\n');
 }
 
+function getHostProfile(host?: string) {
+  if (!host) return undefined;
+  return hostProfiles[host];
+}
+
+export function buildPath(current: string | undefined, additions: string[]) {
+  const parts = current ? current.split(':') : [];
+  for (const entry of additions) {
+    if (!entry) continue;
+    if (!parts.includes(entry)) {
+      parts.push(entry);
+    }
+  }
+  return parts.join(':');
+}
+
+async function loadHostProfiles() {
+  try {
+    const data = await fs.readFile(hostProfilePath, 'utf8');
+    const parsed = JSON.parse(data) as typeof hostProfiles;
+    hostProfiles = parsed;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`Failed to read host profile file at ${hostProfilePath}:`, error);
+    }
+    hostProfiles = {};
+  }
+}
+
 async function buildStateSnapshot({
   host,
   session,
@@ -385,7 +429,49 @@ async function buildStateSnapshot({
   };
 }
 
+async function captureLayouts(session: string, host?: string) {
+  const fmt = '#{window_id}\t#{window_layout}\t#{window_name}\t#{window_index}';
+  const output = await runTmux(['list-windows', '-t', session, '-F', fmt], host);
+  return output
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [id, layout, name, index] = line.split('\t');
+      return { id, layout, name, index: Number(index) };
+    });
+}
+
+async function applyLayout(target: string, layout: string, host?: string) {
+  await runTmux(['select-layout', '-t', target, layout], host);
+}
+
+async function tailPane({
+  host,
+  target,
+  lines,
+  iterations,
+  intervalMs,
+}: {
+  host?: string;
+  target: string;
+  lines: number;
+  iterations: number;
+  intervalMs: number;
+}) {
+  const resolvedHost = resolveHost(host);
+  let lastCapture = '';
+  for (let i = 0; i < iterations; i++) {
+    lastCapture += `\n--- tail iteration ${i + 1}/${iterations} ---\n`;
+    lastCapture += await capturePane(target, -lines, undefined, resolvedHost);
+    if (i < iterations - 1) {
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+  return lastCapture.trim();
+}
+
 async function main() {
+  await loadHostProfiles();
   await ensureLocalTmuxAvailable();
 
   const server = new McpServer(
@@ -537,6 +623,63 @@ async function main() {
         snapshot.capture,
       ].join('\n');
       return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.capture_layout',
+    {
+      title: 'Capture window layouts',
+      description: 'Return window layouts for a session so they can be restored later.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z.string().describe('Session name (optional, defaults to stored session).').optional(),
+      },
+    },
+    async ({ host, session }) => {
+      const resolvedSession = requireSession(session);
+      const layouts = await captureLayouts(resolvedSession, resolveHost(host));
+      const text = layouts
+        .map((l) => `${resolvedSession}:${l.index} (${l.id}) ${l.name} layout=${l.layout}`)
+        .join('\n');
+      return { content: [{ type: 'text', text: text || '(no windows)' }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.restore_layout',
+    {
+      title: 'Restore a window layout',
+      description: 'Apply a saved layout string to a target window.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Window target (e.g., session:window or window id).'),
+        layout: z.string().describe('Layout string obtained from tmux.capture_layout.'),
+      },
+    },
+    async ({ host, target, layout }) => {
+      await applyLayout(target, layout, resolveHost(host));
+      await log('info', `restored layout on ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Restored layout on ${target}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.tail_pane',
+    {
+      title: 'Tail a pane buffer',
+      description: 'Poll a pane multiple times to watch output without reissuing commands.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target to tail (pane id or session:window.pane).'),
+        lines: z.number().describe('How many lines per fetch.').default(200).optional(),
+        iterations: z.number().describe('How many polling iterations.').default(3).optional(),
+        intervalMs: z.number().describe('Delay between polls in milliseconds.').default(1000).optional(),
+      },
+    },
+    async ({ host, target, lines = 200, iterations = 3, intervalMs = 1000 }) => {
+      const tailText = await tailPane({ host, target, lines, iterations, intervalMs });
+      return { content: [{ type: 'text', text: tailText || '(no output)' }] };
     },
   );
 

@@ -54,6 +54,8 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.default_context`: Shows detected default session and a quick session listing.
 - `tmux.state`: Snapshot sessions, windows, panes, and capture of the active/default pane.
 - `tmux.set_default` / `tmux.get_default`: Persist or view default host/session/window/pane.
+- `tmux.capture_layout` / `tmux.restore_layout`: Save and re-apply window layouts.
+- `tmux.tail_pane`: Poll a pane repeatedly to follow output without reissuing commands.
 - `tmux.list_sessions`: Enumerate sessions with window/attach counts.
 - `tmux.list_windows`: List windows (optionally scoped to a session).
 - `tmux.list_panes`: List panes (optionally scoped to a target).
@@ -90,6 +92,15 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
   {"name":"tmux.send_keys","arguments":{"target":"collab:0.0","keys":"ls -lah","enter":true}}
   {"name":"tmux.capture_pane","arguments":{"target":"collab:0.0","start":-200}}
   ```
+- Tail a pane to watch output:
+  ```json
+  {"name":"tmux.tail_pane","arguments":{"target":"collab:0.0","lines":200,"iterations":3,"intervalMs":1000}}
+  ```
+- Capture and restore layouts:
+  ```json
+  {"name":"tmux.capture_layout","arguments":{"session":"collab"}}
+  {"name":"tmux.restore_layout","arguments":{"target":"collab:0","layout":"your-layout-string"}}
+  ```
 - Split a pane and label it:
   ```json
   {"name":"tmux.split_pane","arguments":{"target":"collab:0.0","orientation":"horizontal","command":"htop"}}
@@ -109,6 +120,12 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - `MCP_TMUX_HOST`: Preferred ssh host alias when no explicit host is provided.
 - `TMUX_BIN`: Path to the tmux binary (defaults to `tmux`).
 - PATH fallbacks: the server automatically adds `/opt/homebrew/bin:/usr/local/bin:/usr/bin` when invoking tmux (local or remote) so Homebrew installs are found.
+- Host profiles (optional): `MCP_TMUX_HOSTS_FILE` can point to a JSON file like:
+  ```json
+  {
+    "hashimac": { "pathAdd": ["/opt/homebrew/bin"], "tmuxBin": "/opt/homebrew/bin/tmux", "defaultSession": "ka0s" }
+  }
+  ```
 
 ## Safety notes
 - The server never bypasses tmux permissions; it inherits your user account and socket access.
@@ -130,6 +147,7 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - Branch protection (intended): main should be protected (require PR, no branch deletion). Configure this in repository settings.
 - Ownership: CODEOWNERS assigns all files to @k8ika0s.
 - Project stats: TypeScript, Node >=18, publishes `mcp-tmux` CLI entrypoint, MCP stdio server.
+- Tests: `npm test` (vitest) covers helper path composition.
 
 ## Developing
 - TypeScript build: `npm run build`
