@@ -1,17 +1,72 @@
+
+<p align="center">
+  <img src="./mcp_tmux_logo.png" alt="mcp-tmux logo" width="420" />
+  <br />
+  <em>Remote-first tmux co-pilot for humans + LLMs.</em>
+</p>
+
 # mcp-tmux
 
 [![CI](https://github.com/k8ika0s/mcp-tmux/actions/workflows/ci.yml/badge.svg)](https://github.com/k8ika0s/mcp-tmux/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D18-blue.svg)](https://nodejs.org)
+[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-025E8C?logo=dependabot)](https://github.com/k8ika0s/mcp-tmux/pulls?q=is%3Apr+author%3Aapp%2Fdependabot)
 
-mcp-tmux is a Model Context Protocol server that lets an LLM co-drive tmux alongside a human, with remote SSH-aware session bootstrapping, safety rails, and pull-based state snapshots. The server can create or reconnect to a remote tmux session via your SSH config, send keys, read scrollback, manage windows/panes, and keep defaults so the model doesn’t get lost. Destructive actions require explicit confirmation, and logging is emitted back to the client for observability.
+## Table of Contents
+- [Quickstart (2 minutes)](#quickstart-2-minutes)
+- [Highlights](#highlights)
+- [Prerequisites](#prerequisites)
+- [Install & run](#install--run)
+- [MCP client wiring (example)](#mcp-client-wiring-example)
+- [Exposed tools](#exposed-tools)
+- [Collaborative workflow](#collaborative-workflow)
+- [How-to (verbose examples)](#how-to-verbose-examples)
+- [Configuration](#configuration)
+- [Safety notes](#safety-notes)
+- [Tips for LLM prompts](#tips-for-llm-prompts)
+- [CI, security, and governance](#ci-security-and-governance)
+- [Developing](#developing)
+- [License](#license)
 
+---
+
+mcp-tmux keeps LLMs grounded in reality instead of guessing which pane they are in. It boots or reattaches SSH-backed tmux sessions, injects keystrokes deliberately, captures scrollback on demand, and keeps defaults so the model doesn’t wander. State is pulled fresh instead of hallucinated.
+
+If you want an AI pair in real terminals—debugging live systems, automating repeatable chores, or co-driving without handing over unlimited shell access—this gives you a precise, observable control surface.
+
+> Guardrails exist (confirm flags, logging, defaults). Sharp edges also exist. Pair responsibly.
+
+## Quickstart (2 minutes)
+1) Install & build:
+```bash
+npm install
+npm run build
+```
+2) Run with sensible defaults:
+```bash
+MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx mcp-tmux
+```
+3) In your MCP client, call:
+```
+tmux.open_session → tmux.default_context → tmux.list_windows / tmux.list_panes → tmux.send_keys → tmux.capture_pane
+```
+4) Re-ground anytime with `tmux.state`.
 ## Highlights
 - Remote-first: give it an SSH alias + session name and it will create or reconnect the remote tmux session for you.
 - Collaborative: you and the model can attach to the same tmux; new windows/panes get LLM-friendly labels.
 - Complete control: list, capture, send keys, manage windows/panes/sessions, or fall back to raw tmux commands when needed.
 - Safety in the loop: destructive calls require `confirm=true`; defaults keep the model from mis-targeting panes.
 - Observability: logging back to the client plus a `tmux.state` snapshot that includes recent scrollback.
+- Tasks-ready: built-in MCP task helpers for tailing, watching, and waiting on patterns.
+
+### Capability map
+| Pillar | What it covers |
+| --- | --- |
+| Remote orchestration | `tmux.open_session`, SSH-aware tmux spawn/attach, PATH/tmux-bin overrides, host profiles |
+| Grounded control | `tmux.state`, `tmux.capture_pane`, `tmux.list_*`, default targets, pane/window labels |
+| Collaboration | `tmux.new_window`, `tmux.split_pane`, sync panes, layout capture/restore, layout profiles |
+| Safety | `confirm=true` on destructive calls, logging + audit logs, defaults to avoid mis-targeting |
+| Automation | `tmux.multi_run`, tail/pattern/watch tasks, fan-out capture/tail/pattern modes |
 
 ## Prerequisites
 - tmux available on PATH (override with `TMUX_BIN=/path/to/tmux`). For remote flows, tmux must be installed on the remote host.
@@ -173,6 +228,8 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - `MCP_TMUX_SESSION`: Prefer this session when no explicit target is provided.
 - `MCP_TMUX_HOST`: Preferred ssh host alias when no explicit host is provided.
 - `TMUX_BIN`: Path to the tmux binary (defaults to `tmux`).
+- `MCP_TMUX_TIMEOUT_MS`: Timeout in ms for tmux/ssh invocations (default 15000).
+- Defaults: set via `tmux.set_default` or `tmux.select_pane`; tools like `tmux.capture_pane`, `tmux.send_keys`, and tail/pattern tasks fall back to the default pane when `target` is omitted.
 - PATH fallbacks: the server automatically adds `/opt/homebrew/bin:/usr/local/bin:/usr/bin` when invoking tmux (local or remote) so Homebrew installs are found.
 - Host profiles (optional): `MCP_TMUX_HOSTS_FILE` can point to a JSON file like:
   ```json
@@ -184,6 +241,8 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - Logging directory: defaults to `~/.config/mcp-tmux/logs` (override with `MCP_TMUX_LOG_DIR`), organized by host/session with daily log files.
 
 ## Safety notes
+> Safety spotlight: destructive tools need `confirm=true`, and defaults help you avoid targeting the wrong pane. Keep logs on; review captures before acting.
+
 - The server never bypasses tmux permissions; it inherits your user account and socket access.
 - `tmux.send_keys` will happily run destructive commands—ask for confirmation before altering state or killing sessions/windows.
 - Destructive tools (`tmux/kill-*`, destructive `tmux.command`) require `confirm=true`.
@@ -200,6 +259,11 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 ## CI, security, and governance
 - CI: GitHub Actions (`CI` workflow) runs `npm run build`.
 - Security: dependency audit job (`npm audit --audit-level=high`) runs in CI.
+- Release: manual workflow `Release (manual)` (workflow dispatch) builds and packs. Inputs:
+  - `publish=true|false` (skips publish if no `NPM_TOKEN`, emits warning)
+  - `tag` (ref to release, default main)
+  - `version` (set explicit version via `npm version <ver> --no-git-tag-version`)
+  - `bump` (semver bump `patch|minor|major` if `version` is not provided)
 - Branch protection (intended): main should be protected (require PR, no branch deletion). Configure this in repository settings.
 - Ownership: CODEOWNERS assigns all files to @k8ika0s.
 - Project stats: TypeScript, Node >=18, publishes `mcp-tmux` CLI entrypoint, MCP stdio server.
@@ -208,6 +272,13 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 ## Developing
 - TypeScript build: `npm run build`
 - Linting/formatting: not configured; keep patches small and readable.
+- Make targets:
+  - `make install` — install dependencies
+  - `make build` — compile to `dist/`
+  - `make test` — run tests (vitest)
+  - `make dev` — hot-reload dev mode
+  - `make start` — run compiled server
+  - `make clean` — remove `dist/`
 
 ## License
 AGPL-3.0-only
