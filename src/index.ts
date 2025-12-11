@@ -82,6 +82,7 @@ You are connected to a tmux MCP server. Use these tools to collaborate with a hu
 - Safety: destructive tools require confirm=true; prefer tmux.command only when helpers don’t cover it.
 - After sending keys, always capture-pane to read output; re-list panes/windows to stay in sync.
 - Helpers: tmux.tail_pane (poll output), tmux.capture_layout/tmux.restore_layout (save/apply layouts), host profiles via MCP_TMUX_HOSTS_FILE for per-host PATH/tmux bin defaults.
+- Fanout: tmux.multi_run to send the same command to multiple hosts/panes and aggregate results.
 `.trim();
 
 async function runTmux(args: string[], host?: string) {
@@ -608,6 +609,73 @@ export function diffNewFiles(prev: string[], next: string[]) {
   return next.filter((f) => !prevSet.has(f));
 }
 
+async function fanoutSendCapture({
+  targets,
+  keys,
+  enter,
+  capture = true,
+  captureLines = 200,
+  delayMs = 0,
+}: {
+  targets: { host?: string; target?: string; captureLines?: number; delayMs?: number }[];
+  keys: string;
+  enter: boolean;
+  capture?: boolean;
+  captureLines?: number;
+  delayMs?: number;
+}) {
+  const results = await Promise.allSettled(
+    targets.map(async (t) => {
+      const resolvedHost = resolveHost(t.host);
+      const paneTarget = t.target ?? defaultPane;
+      if (!paneTarget) {
+        throw new McpError(ErrorCode.InvalidParams, 'target is required (or set default pane)');
+      }
+      await sendKeys(paneTarget, keys, enter, resolvedHost);
+      await auditLog(resolvedHost, getSessionFromTarget(paneTarget), 'multi_run.send_keys', {
+        target: paneTarget,
+        keys,
+        enter,
+      });
+      if (delayMs && delayMs > 0) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+      let output = '';
+      if (capture) {
+        output = await capturePane(paneTarget, -(t.captureLines ?? captureLines), undefined, resolvedHost);
+        await auditLog(resolvedHost, getSessionFromTarget(paneTarget), 'multi_run.capture', {
+          target: paneTarget,
+          length: output.length,
+        });
+      }
+      return { host: resolvedHost ?? 'local', target: paneTarget, output };
+    }),
+  );
+
+  const lines: string[] = [];
+  let ok = 0;
+  let fail = 0;
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      ok++;
+      lines.push(`== ${r.value.host} ${r.value.target} ==`);
+      if (capture) {
+        lines.push(r.value.output || '(no output)');
+      } else {
+        lines.push('(capture disabled)');
+      }
+    } else {
+      fail++;
+      const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      lines.push(`== error ==`);
+      lines.push(msg);
+    }
+  }
+  lines.push('');
+  lines.push(`Summary: ${ok} succeeded, ${fail} failed`);
+  return lines.join('\n');
+}
+
 async function saveLayoutProfile(name: string, session: string, host?: string) {
   const windows = await captureLayouts(session, host);
   layoutProfiles[name] = {
@@ -1053,6 +1121,36 @@ async function main() {
         return taskStore.getTaskResult(taskId);
       },
     } as any,
+  );
+
+  server.registerTool(
+    'tmux.multi_run',
+    {
+      title: 'Fan-out send and capture',
+      description: 'Send the same keys to multiple targets (across hosts) and optionally capture results.',
+      inputSchema: {
+        targets: z
+          .array(
+            z.object({
+              host: z.string().describe('SSH host alias (optional).').optional(),
+              target: z.string().describe('Pane target (pane id or session:window.pane).').optional(),
+              captureLines: z.number().describe('Lines to capture for this target.').optional(),
+              delayMs: z.number().describe('Delay before capture for this target.').optional(),
+            }),
+          )
+          .nonempty()
+          .describe('List of targets to fan-out to.'),
+        keys: z.string().describe('Keys/command to send.'),
+        enter: z.boolean().describe('Append Enter.').default(true).optional(),
+        capture: z.boolean().describe('Capture after sending.').default(true).optional(),
+        captureLines: z.number().describe('Default lines to capture (per-target override available).').default(200).optional(),
+        delayMs: z.number().describe('Default delay before capture in ms (per-target override available).').default(0).optional(),
+      },
+    },
+    async ({ targets, keys, enter = true, capture = true, captureLines = 200, delayMs = 0 }) => {
+      const text = await fanoutSendCapture({ targets, keys, enter, capture, captureLines, delayMs });
+      return { content: [{ type: 'text', text }] };
+    },
   );
 
   server.experimental.tasks.registerToolTask(
