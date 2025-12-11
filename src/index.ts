@@ -44,6 +44,8 @@ const extraPath = tmuxFallbackPaths.join(':');
 const hostProfilePath =
   process.env.MCP_TMUX_HOSTS_FILE ||
   path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'hosts.json');
+const logBaseDir =
+  process.env.MCP_TMUX_LOG_DIR || path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'logs');
 const layoutProfilePath = path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'layouts.json');
 let hostProfiles: Record<
   string,
@@ -69,6 +71,7 @@ const defaultTargetNote = () =>
   `Defaults -> host: ${defaultHost ?? '(unset)'}, session: ${defaultSession ?? '(unset)'}, pane: ${
     defaultPane ?? '(unset)'
   }`;
+const isoTimestamp = () => new Date().toISOString();
 
 const instructions = `
 You are connected to a tmux MCP server. Use these tools to collaborate with a human inside tmux.
@@ -520,6 +523,21 @@ function extractRecentCommands(text: string, max = 15) {
   return cmds.reverse();
 }
 
+function getSessionFromTarget(target: string | undefined) {
+  if (!target) return defaultSession;
+  const parts = target.split(':');
+  return parts[0] || defaultSession;
+}
+
+async function appendSessionLog(host: string | undefined, session: string | undefined, message: string) {
+  const h = host ?? defaultHost ?? 'local';
+  const s = session ?? defaultSession ?? 'unknown';
+  const dir = path.join(logBaseDir, h, s);
+  const file = path.join(dir, `${isoTimestamp().slice(0, 10)}.log`);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.appendFile(file, `[${isoTimestamp()}] ${message}\n`);
+}
+
 async function captureHistory({
   host,
   session,
@@ -836,6 +854,7 @@ async function main() {
       parts.push(history.commands.join('\n') || '(none)');
       parts.push('');
       parts.push(defaultTargetNote());
+      await appendSessionLog(resolveHost(host), session ?? getSessionFromTarget(target), 'context_history captured');
       return { content: [{ type: 'text', text: parts.join('\n') }] };
     },
   );
@@ -920,6 +939,7 @@ async function main() {
     },
     async ({ host, target, lines = 200, iterations = 3, intervalMs = 1000 }) => {
       const tailText = await tailPane({ host, target, lines, iterations, intervalMs });
+      await appendSessionLog(resolveHost(host), getSessionFromTarget(target), `tail_pane ${target} lines=${lines}`);
       return { content: [{ type: 'text', text: tailText || '(no output)' }] };
     },
   );
@@ -1308,6 +1328,7 @@ async function main() {
       const resolvedHost = resolveHost(host);
       await sendKeys(target, keys, enter, resolvedHost);
       await log('debug', `send-keys to ${target}${resolvedHost ? ` on ${resolvedHost}` : ''}: "${keys}"`);
+      await appendSessionLog(resolvedHost, getSessionFromTarget(target), `send-keys "${keys}" enter=${enter}`);
       return {
         content: [{ type: 'text', text: `Sent keys to ${target}${enter ? ' (with Enter)' : ''}.` }],
       };
