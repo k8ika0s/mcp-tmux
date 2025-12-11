@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { InMemoryTaskStore, InMemoryTaskMessageQueue } from '@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js';
 
 type TmuxSession = {
   id: string;
@@ -609,8 +610,17 @@ async function main() {
         tools: {},
         logging: {},
         resources: {},
+        tasks: {
+          requests: {
+            tools: {
+              call: {},
+            },
+          },
+        },
       },
       instructions,
+      taskStore: new InMemoryTaskStore(),
+      taskMessageQueue: new InMemoryTaskMessageQueue(),
     },
   );
 
@@ -642,6 +652,7 @@ async function main() {
       return { contents: [{ uri: 'tmux://state/default', text }] };
     },
   );
+
 
   const log = async (
     level: 'info' | 'debug' | 'error' | 'notice' | 'warning' | 'critical' | 'alert' | 'emergency',
@@ -897,6 +908,55 @@ async function main() {
       const tailText = await tailPane({ host, target, lines, iterations, intervalMs });
       return { content: [{ type: 'text', text: tailText || '(no output)' }] };
     },
+  );
+
+  server.experimental.tasks.registerToolTask(
+    'tmux.tail_task',
+    {
+      title: 'Tail a pane (task)',
+      description: 'Create a task to poll pane output over time. Client can poll for incremental results.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target to tail (pane id or session:window.pane).'),
+        lines: z.number().describe('How many lines per fetch.').default(200).optional(),
+        intervalMs: z.number().describe('Delay between polls in milliseconds.').default(1500).optional(),
+        iterations: z.number().describe('How many polling iterations before auto-complete.').default(5).optional(),
+      },
+      outputSchema: undefined,
+    } as any,
+    {
+      async createTask(
+        { host, target, lines = 200, intervalMs = 1500, iterations = 5 }: any,
+        { taskStore }: any,
+      ) {
+        const task = await taskStore.createTask({});
+        (async () => {
+          const resolvedHost = resolveHost(host);
+          const parts: string[] = [];
+          for (let i = 0; i < iterations; i++) {
+            const capture = await capturePane(target, -lines, undefined, resolvedHost);
+            parts.push(`Iteration ${i + 1}/${iterations}`);
+            parts.push(capture || '(empty)');
+            if (i < iterations - 1) {
+              await new Promise((r) => setTimeout(r, intervalMs));
+            }
+          }
+          const finalCapture = await capturePane(target, -lines, undefined, resolvedHost);
+          parts.push('Final:');
+          parts.push(finalCapture || '(empty)');
+          await taskStore.storeTaskResult(task.taskId, 'completed', {
+            content: [{ type: 'text', text: parts.join('\n') }],
+          });
+        })();
+        return { task };
+      },
+      async getTask(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTask(taskId);
+      },
+      async getTaskResult(_args: any, { taskId, taskStore }: any) {
+        return taskStore.getTaskResult(taskId);
+      },
+    } as any,
   );
 
   server.registerTool(

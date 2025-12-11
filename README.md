@@ -56,6 +56,7 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.set_default` / `tmux.get_default`: Persist or view default host/session/window/pane.
 - `tmux.capture_layout` / `tmux.restore_layout`: Save and re-apply window layouts.
 - `tmux.tail_pane`: Poll a pane repeatedly to follow output without reissuing commands.
+- `tmux.tail_task`: Task-based tail with polling over time (client polls task results).
 - `tmux.select_window` / `tmux.select_pane`: Change focus targets explicitly.
 - `tmux.set_sync_panes`: Toggle synchronize-panes for a window.
 - `tmux.save_layout_profile` / `tmux.apply_layout_profile`: Persist and re-apply layout profiles by name.
@@ -102,6 +103,10 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - Tail a pane to watch output:
   ```json
   {"name":"tmux.tail_pane","arguments":{"target":"collab:0.0","lines":200,"iterations":3,"intervalMs":1000}}
+  ```
+- Tail via task (poll results):
+  ```json
+  {"name":"tmux.tail_task","arguments":{"target":"collab:0.0","lines":200,"iterations":5,"intervalMs":1500}}
   ```
 - Capture context history and recent commands:
   ```json
