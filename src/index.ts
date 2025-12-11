@@ -1,0 +1,871 @@
+#!/usr/bin/env node
+
+import { execa } from 'execa';
+import { z } from 'zod';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+
+type TmuxSession = {
+  id: string;
+  name: string;
+  windows: number;
+  attached: number;
+  created: number;
+};
+
+type TmuxWindow = {
+  session: string;
+  id: string;
+  index: number;
+  name: string;
+  active: boolean;
+  panes: number;
+  flags: string;
+};
+
+type TmuxPane = {
+  session: string;
+  window: string;
+  id: string;
+  index: number;
+  active: boolean;
+  tty: string;
+  command: string;
+  title: string;
+};
+
+const tmuxBinary = process.env.TMUX_BIN || 'tmux';
+let defaultHost = process.env.MCP_TMUX_HOST || undefined;
+let defaultSession = process.env.MCP_TMUX_SESSION || undefined;
+let defaultWindow: string | undefined;
+let defaultPane: string | undefined;
+
+const instructions = `
+You are connected to a tmux MCP server. Use these tools to collaborate with a human inside tmux.
+
+- Playbook: (1) tmux.open_session (host+session), (2) tmux.default_context, (3) tmux.list_windows/panes, (4) tmux.send_keys then tmux.capture_pane, (5) repeat.
+- Targets: session, session:window, session:window.pane, or IDs. Use tmux.set_default to pin host/session/window/pane.
+- Remote: provide host (ssh alias) + session or set MCP_TMUX_HOST/MCP_TMUX_SESSION. Server runs tmux via ssh -T <host> tmux ....
+- Safety: destructive tools require confirm=true; prefer tmux.command only when helpers don’t cover it.
+- After sending keys, always capture-pane to read output; re-list panes/windows to stay in sync.
+`.trim();
+
+async function runTmux(args: string[], host?: string) {
+  try {
+    const command = host ? 'ssh' : tmuxBinary;
+    const commandArgs = host ? ['-T', host, tmuxBinary, ...args] : args;
+    const { stdout } = await execa(command, commandArgs);
+    return stdout.trim();
+  } catch (error) {
+    const err = error as { stderr?: string; stdout?: string; message: string };
+    const detail = err.stderr || err.stdout || err.message;
+    throw new McpError(
+      ErrorCode.InternalError,
+      `${host ? `ssh ${host} ` : ''}tmux ${args.join(' ')} failed: ${detail}`.trim(),
+    );
+  }
+}
+
+function resolveHost(host?: string) {
+  return host ?? defaultHost;
+}
+
+function resolveSession(session?: string) {
+  return session ?? defaultSession;
+}
+
+function requireHost(host?: string) {
+  const resolved = resolveHost(host);
+  if (!resolved) {
+    throw new McpError(ErrorCode.InvalidParams, 'host is required (set host param or MCP_TMUX_HOST)');
+  }
+  return resolved;
+}
+
+function requireSession(session?: string) {
+  const resolved = resolveSession(session);
+  if (!resolved) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'session is required (set session param, MCP_TMUX_SESSION, or use tmux.open_session)',
+    );
+  }
+  return resolved;
+}
+
+async function ensureLocalTmuxAvailable() {
+  try {
+    await runTmux(['-V']);
+  } catch (error) {
+    // Keep server running even if local tmux missing; remote hosts may still be usable.
+    console.warn(`Warning: local tmux unavailable (${tmuxBinary} -V failed). Remote hosts may still work.`, error);
+  }
+}
+
+async function detectDefaultSession(): Promise<string | undefined> {
+  if (defaultSession) {
+    return defaultSession;
+  }
+
+  if (process.env.TMUX) {
+    try {
+      const name = await runTmux(['display-message', '-p', '#S']);
+      return name || undefined;
+    } catch {
+      // Ignore; not inside an attached tmux client.
+    }
+  }
+
+  return undefined;
+}
+
+async function listSessions(host?: string): Promise<TmuxSession[]> {
+  const fmt = '#{session_id}\t#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}';
+  const raw = await runTmux(['list-sessions', '-F', fmt], host);
+  if (!raw) return [];
+
+  return raw.split('\n').map((line) => {
+    const [id, name, windows, attached, created] = line.split('\t');
+    return {
+      id,
+      name,
+      windows: Number(windows),
+      attached: Number(attached),
+      created: Number(created),
+    };
+  });
+}
+
+async function listWindows(target?: string, host?: string): Promise<TmuxWindow[]> {
+  const fmt =
+    '#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}\t#{window_flags}';
+  const args = ['list-windows', '-F', fmt];
+  if (target) {
+    args.push('-t', target);
+  }
+
+  const raw = await runTmux(args, host);
+  if (!raw) return [];
+
+  return raw.split('\n').map((line) => {
+    const [session, id, index, name, active, panes, flags] = line.split('\t');
+    return {
+      session,
+      id,
+      index: Number(index),
+      name,
+      active: active === '1',
+      panes: Number(panes),
+      flags,
+    };
+  });
+}
+
+async function listPanes(target?: string, host?: string): Promise<TmuxPane[]> {
+  const fmt =
+    '#{session_name}\t#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t#{pane_tty}\t#{pane_current_command}\t#{pane_title}';
+  const args = ['list-panes', '-F', fmt];
+  if (target) {
+    args.push('-t', target);
+  }
+
+  const raw = await runTmux(args, host);
+  if (!raw) return [];
+
+  return raw.split('\n').map((line) => {
+    const [session, window, id, index, active, tty, command, title] = line.split('\t');
+    return {
+      session,
+      window,
+      id,
+      index: Number(index),
+      active: active === '1',
+      tty,
+      command,
+      title,
+    };
+  });
+}
+
+async function capturePane(target: string, start?: number, end?: number, host?: string) {
+  const args = ['capture-pane', '-p', '-t', target];
+  if (typeof start === 'number') {
+    args.push('-S', start.toString());
+  } else {
+    args.push('-S', '-200'); // default: last ~200 lines
+  }
+  if (typeof end === 'number') {
+    args.push('-E', end.toString());
+  }
+
+  return runTmux(args, host);
+}
+
+async function sendKeys(target: string, keys: string, enter?: boolean, host?: string) {
+  if (!keys || !keys.trim()) {
+    throw new McpError(ErrorCode.InvalidParams, 'keys must be non-empty');
+  }
+  const args = ['send-keys', '-t', target, '--', keys];
+  if (enter) {
+    args.push('Enter');
+  }
+  await runTmux(args, host);
+}
+
+async function createSession(name: string, command?: string, host?: string) {
+  if (!name || !name.trim()) {
+    throw new McpError(ErrorCode.InvalidParams, 'session name is required');
+  }
+  const args = ['new-session', '-d', '-s', name];
+  if (command) {
+    args.push(command);
+  }
+  await runTmux(args, host);
+}
+
+async function createWindow(target: string, name?: string, command?: string, host?: string) {
+  const args = ['new-window', '-t', target];
+  const finalName = name || `llm-window-${Date.now().toString(36)}`;
+  if (name) {
+    args.push('-n', name);
+  } else {
+    args.push('-n', finalName);
+  }
+  if (command) {
+    args.push(command);
+  }
+  await runTmux(args, host);
+  return finalName;
+}
+
+async function splitPane(target: string, orientation: 'horizontal' | 'vertical', command?: string, host?: string) {
+  const args = ['split-window', '-t', target];
+  if (orientation === 'horizontal') {
+    args.push('-h');
+  } else {
+    args.push('-v');
+  }
+  if (command) {
+    args.push(command);
+  }
+  await runTmux(args, host);
+}
+
+async function killSession(target: string, host?: string) {
+  await runTmux(['kill-session', '-t', target], host);
+}
+
+async function killWindow(target: string, host?: string) {
+  await runTmux(['kill-window', '-t', target], host);
+}
+
+async function killPane(target: string, host?: string) {
+  await runTmux(['kill-pane', '-t', target], host);
+}
+
+async function renameSession(target: string, name: string, host?: string) {
+  await runTmux(['rename-session', '-t', target, name], host);
+}
+
+async function renameWindow(target: string, name: string, host?: string) {
+  await runTmux(['rename-window', '-t', target, name], host);
+}
+
+async function ensureSession(host: string | undefined, session: string, command?: string) {
+  let existed = true;
+  try {
+    await runTmux(['has-session', '-t', session], host);
+  } catch {
+    existed = false;
+    const args = ['new-session', '-d', '-s', session];
+    if (command) {
+      args.push(command);
+    }
+    await runTmux(args, host);
+  }
+  return existed;
+}
+
+async function setPaneTitle(target: string | undefined, title: string, host?: string) {
+  const args = ['select-pane', '-T', title];
+  if (target) {
+    args.push('-t', target);
+  }
+  await runTmux(args, host);
+}
+
+function summarizeDefaults() {
+  return [
+    `host: ${defaultHost ?? '(unset)'}`,
+    `session: ${defaultSession ?? '(unset)'}`,
+    `window: ${defaultWindow ?? '(unset)'}`,
+    `pane: ${defaultPane ?? '(unset)'}`,
+  ].join('\n');
+}
+
+function formatSessions(sessions: TmuxSession[]) {
+  if (!sessions.length) return 'No tmux sessions found.';
+  return sessions
+    .map(
+      (s) =>
+        `${s.name} (${s.id}) windows=${s.windows} attached=${s.attached} started=${new Date(
+          s.created * 1000,
+        ).toISOString()}`,
+    )
+    .join('\n');
+}
+
+function formatWindows(windows: TmuxWindow[]) {
+  if (!windows.length) return 'No windows found.';
+  return windows
+    .map(
+      (w) =>
+        `${w.session}:${w.index} ${w.name} (${w.id}) active=${w.active} panes=${w.panes} flags=${w.flags}`,
+    )
+    .join('\n');
+}
+
+function formatPanes(panes: TmuxPane[]) {
+  if (!panes.length) return 'No panes found.';
+  return panes
+    .map(
+      (p) =>
+        `${p.session}:${p.window}.${p.index} ${p.id} active=${p.active} tty=${p.tty} cmd=${p.command} title=${p.title}`,
+    )
+    .join('\n');
+}
+
+async function buildStateSnapshot({
+  host,
+  session,
+  captureLines = 200,
+}: {
+  host?: string;
+  session?: string;
+  captureLines?: number;
+}) {
+  const resolvedHost = resolveHost(host);
+  const resolvedSession = resolveSession(session);
+  if (!resolvedSession) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'session is required to build a state snapshot (set default or pass session).',
+    );
+  }
+
+  const sessions = await listSessions(resolvedHost);
+  const windows = await listWindows(resolvedSession, resolvedHost);
+  const panes = await listPanes(resolvedSession, resolvedHost);
+  const activeWindow = windows.find((w) => w.active);
+  const activePane = panes.find((p) => p.active && (!defaultPane || p.id === defaultPane)) || panes.find((p) => p.active);
+  const targetPane = defaultPane ?? activePane?.id;
+  let capture = '(no capture target)';
+  if (targetPane) {
+    capture = await capturePane(targetPane, -captureLines, undefined, resolvedHost);
+  }
+
+  return {
+    host: resolvedHost ?? '(local)',
+    session: resolvedSession,
+    windows,
+    panes,
+    captureTarget: targetPane,
+    capture,
+    sessionsText: formatSessions(sessions),
+    windowsText: formatWindows(windows),
+    panesText: formatPanes(panes),
+  };
+}
+
+async function main() {
+  await ensureLocalTmuxAvailable();
+
+  const server = new McpServer(
+    {
+      name: 'mcp-tmux',
+      version: '1.0.0',
+      websiteUrl: 'https://github.com/k8ika0s/mcp-tmux',
+      title: 'tmux MCP server',
+    },
+    {
+      capabilities: {
+        tools: {},
+        logging: {},
+      },
+      instructions,
+    },
+  );
+
+  const log = async (
+    level: 'info' | 'debug' | 'error' | 'notice' | 'warning' | 'critical' | 'alert' | 'emergency',
+    data: string,
+    sessionId?: string,
+  ) => {
+    try {
+      await server.sendLoggingMessage({ level, data }, sessionId);
+    } catch {
+      // best effort
+    }
+  };
+
+  server.registerTool(
+    'tmux.set_default',
+    {
+      title: 'Set default host/session/window/pane',
+      description: 'Persist defaults for later tool calls. Omit fields you do not want to change.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias to remember.').optional(),
+        session: z.string().describe('Session name to remember.').optional(),
+        window: z.string().describe('Window target to remember.').optional(),
+        pane: z.string().describe('Pane target to remember.').optional(),
+      },
+    },
+    async ({ host, session, window, pane }) => {
+      if (host !== undefined) defaultHost = host || undefined;
+      if (session !== undefined) defaultSession = session || undefined;
+      if (window !== undefined) defaultWindow = window || undefined;
+      if (pane !== undefined) defaultPane = pane || undefined;
+      return { content: [{ type: 'text', text: `Defaults updated:\n${summarizeDefaults()}` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.get_default',
+    {
+      title: 'Show default host/session/window/pane',
+      description: 'Display the current remembered defaults.',
+    },
+    async () => ({ content: [{ type: 'text', text: summarizeDefaults() }] }),
+  );
+
+  server.registerTool(
+    'tmux.open_session',
+    {
+      title: 'Ensure/attach remote tmux session',
+      description:
+        'Given an ssh host alias and session name, ensure the remote tmux session exists (create if missing) and set it as default for subsequent commands.',
+      inputSchema: {
+        host: z.string().describe('SSH config host alias to connect to.'),
+        session: z.string().describe('tmux session name on the remote host.'),
+        command: z
+          .string()
+          .describe('Optional command to start the session with if it needs to be created.')
+          .optional(),
+      },
+    },
+    async ({ host, session, command }) => {
+      const existed = await ensureSession(host, session, command);
+      defaultHost = host;
+      defaultSession = session;
+      defaultWindow = undefined;
+      defaultPane = undefined;
+      await log('info', `${existed ? 'reconnected' : 'created'} session ${session} on ${host}`);
+      const attachHint = `ssh -t ${host} ${tmuxBinary} attach -t ${session}`;
+      const text = existed
+        ? `Reconnected to remote session ${session} on ${host}. Attach with: ${attachHint}`
+        : `Created remote session ${session} on ${host}. Attach with: ${attachHint}`;
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.default_context',
+    {
+      title: 'Show default tmux target context',
+      description: 'Returns the default session (if any) and a quick layout snapshot.',
+    },
+    async () => {
+      const host = resolveHost();
+      const sessions = await listSessions(host);
+      const defaultSession = await detectDefaultSession();
+
+      const summary = [
+        host ? `Default host: ${host}` : 'Default host: local (no host set)',
+        defaultSession ? `Default session: ${defaultSession}` : 'No default session detected.',
+        formatSessions(sessions),
+      ].join('\n\n');
+
+      return {
+        content: [{ type: 'text', text: summary }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.state',
+    {
+      title: 'Snapshot tmux state',
+      description: 'Return sessions, windows, panes, and the last lines of the active/default pane.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z
+          .string()
+          .describe('Session name (optional). Uses default session if set; required if none set.')
+          .optional(),
+        captureLines: z
+          .number()
+          .describe('How many lines of scrollback to include from the capture target (default 200).')
+          .optional(),
+      },
+    },
+    async ({ host, session, captureLines }) => {
+      const snapshot = await buildStateSnapshot({
+        host,
+        session,
+        captureLines: captureLines ?? 200,
+      });
+      const text = [
+        `Host: ${snapshot.host}`,
+        `Session: ${snapshot.session}`,
+        `Capture target: ${snapshot.captureTarget ?? '(none)'}`,
+        '',
+        snapshot.sessionsText,
+        '',
+        snapshot.windowsText,
+        '',
+        snapshot.panesText,
+        '',
+        `Capture (last ${captureLines ?? 200} lines):`,
+        snapshot.capture,
+      ].join('\n');
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.list_sessions',
+    {
+      title: 'List tmux sessions',
+      description: 'Enumerate sessions with attachment counts and window totals.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). If omitted, uses default host or local.').optional(),
+      },
+    },
+    async ({ host }) => {
+      const sessions = await listSessions(resolveHost(host));
+      return {
+        content: [{ type: 'text', text: formatSessions(sessions) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.list_windows',
+    {
+      title: 'List windows',
+      description: 'List windows within a session (or all sessions if no target provided).',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Session name or id to list (optional). If omitted, lists all.').optional(),
+      },
+    },
+    async ({ target, host }) => {
+      const windows = await listWindows(target, resolveHost(host));
+      return {
+        content: [{ type: 'text', text: formatWindows(windows) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.list_panes',
+    {
+      title: 'List panes',
+      description: 'List panes across windows or inside a specific target.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z
+          .string()
+          .describe('Target (session, window, or pane) to narrow the list. Optional.')
+          .optional(),
+      },
+    },
+    async ({ target, host }) => {
+      const panes = await listPanes(target, resolveHost(host));
+      return {
+        content: [{ type: 'text', text: formatPanes(panes) }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.capture_pane',
+    {
+      title: 'Capture pane output',
+      description: 'Read the scrollback of a pane to observe command results.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target (e.g. session:window.pane or pane id).'),
+        start: z
+          .number()
+          .describe('Optional start line offset (e.g. -200 for last 200 lines). Defaults to -200.')
+          .optional(),
+        end: z.number().describe('Optional end line offset.').optional(),
+      },
+    },
+    async ({ target, start, end, host }) => {
+      const output = await capturePane(target, start, end, resolveHost(host));
+      return {
+        content: [{ type: 'text', text: output || '(empty pane)' }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.send_keys',
+    {
+      title: 'Send keys to pane',
+      description: 'Send keystrokes to a tmux target, optionally appending Enter.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target (pane id or session:window.pane).'),
+        keys: z.string().describe('The exact text/keys to send.'),
+        enter: z.boolean().describe('Append Enter after the keys.').default(true).optional(),
+      },
+    },
+    async ({ target, keys, enter = true, host }) => {
+      const resolvedHost = resolveHost(host);
+      await sendKeys(target, keys, enter, resolvedHost);
+      await log('debug', `send-keys to ${target}${resolvedHost ? ` on ${resolvedHost}` : ''}: "${keys}"`);
+      return {
+        content: [{ type: 'text', text: `Sent keys to ${target}${enter ? ' (with Enter)' : ''}.` }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.new_session',
+    {
+      title: 'Create a new session',
+      description: 'Create a detached tmux session to collaborate in.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        name: z.string().describe('Session name to create.'),
+        command: z.string().describe('Optional command to start in the first window.').optional(),
+      },
+    },
+    async ({ name, command, host }) => {
+      const resolvedHost = resolveHost(host);
+      await createSession(name, command, resolvedHost);
+      defaultHost = resolvedHost ?? defaultHost;
+      defaultSession = name;
+      defaultWindow = undefined;
+      defaultPane = undefined;
+      await log('info', `created session ${name}${resolvedHost ? ` on ${resolvedHost}` : ''}`);
+      return {
+        content: [{ type: 'text', text: `Created session ${name}${resolvedHost ? ` on ${resolvedHost}` : ''}.` }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.new_window',
+    {
+      title: 'Create a new window',
+      description: 'Create a window in a target session, useful for side-by-side collaboration.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Target session (or window) to create the window in, e.g. mysession.'),
+        name: z.string().describe('Optional window name.').optional(),
+        command: z.string().describe('Optional command to run when the window starts.').optional(),
+      },
+    },
+    async ({ target, name, command, host }) => {
+      const resolvedHost = resolveHost(host);
+      const finalName = await createWindow(target, name, command, resolvedHost);
+      defaultWindow = `${target}:${name ?? finalName}`;
+      await log(
+        'info',
+        `created window ${target}:${name ?? finalName}${resolvedHost ? ` on ${resolvedHost}` : ''}`,
+      );
+      return {
+        content: [{ type: 'text', text: `Created window in ${target}${name ? ` named ${name}` : ` named ${finalName}`}.` }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.split_pane',
+    {
+      title: 'Split a pane',
+      description: 'Split a pane horizontally or vertically, optionally running a command.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target (pane id or session:window.pane).'),
+        orientation: z
+          .enum(['horizontal', 'vertical'])
+          .describe('horizontal = side-by-side (-h), vertical = stacked (-v).')
+          .default('horizontal'),
+        command: z.string().describe('Optional command to run in the new pane.').optional(),
+      },
+    },
+    async ({ target, orientation, command, host }) => {
+      const resolvedHost = resolveHost(host);
+      const title = `llm-pane-${Date.now().toString(36)}`;
+      await splitPane(target, orientation, command, resolvedHost);
+      await setPaneTitle(undefined, title, resolvedHost).catch(() => {}); // best effort title on new active pane
+      await log('info', `split ${target} (${orientation})${resolvedHost ? ` on ${resolvedHost}` : ''}`);
+      return {
+        content: [{ type: 'text', text: `Split ${target} (${orientation}).` }],
+      };
+    },
+  );
+
+  server.registerTool(
+    'tmux.kill_session',
+    {
+      title: 'Kill a session',
+      description: 'Terminate a tmux session. Use with care.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Session name or id to kill.'),
+        confirm: z
+          .boolean()
+          .describe('Must be true to proceed.')
+          .default(false)
+          .optional(),
+      },
+    },
+    async ({ target, host, confirm }) => {
+      if (!confirm) {
+        throw new McpError(ErrorCode.InvalidParams, 'confirm=true is required to kill a session');
+      }
+      await killSession(target, resolveHost(host));
+      await log('warning', `killed session ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Killed session ${target}${host ? ` on ${host}` : ''}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.kill_window',
+    {
+      title: 'Kill a window',
+      description: 'Close a tmux window. Use with care.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Window target, e.g. session:window or window id.'),
+        confirm: z
+          .boolean()
+          .describe('Must be true to proceed.')
+          .default(false)
+          .optional(),
+      },
+    },
+    async ({ target, host, confirm }) => {
+      if (!confirm) {
+        throw new McpError(ErrorCode.InvalidParams, 'confirm=true is required to kill a window');
+      }
+      await killWindow(target, resolveHost(host));
+      await log('warning', `killed window ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Killed window ${target}${host ? ` on ${host}` : ''}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.kill_pane',
+    {
+      title: 'Kill a pane',
+      description: 'Close a tmux pane. Use with care.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Pane target, e.g. session:window.pane or pane id.'),
+        confirm: z
+          .boolean()
+          .describe('Must be true to proceed.')
+          .default(false)
+          .optional(),
+      },
+    },
+    async ({ target, host, confirm }) => {
+      if (!confirm) {
+        throw new McpError(ErrorCode.InvalidParams, 'confirm=true is required to kill a pane');
+      }
+      await killPane(target, resolveHost(host));
+      await log('warning', `killed pane ${target}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Killed pane ${target}${host ? ` on ${host}` : ''}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.rename_session',
+    {
+      title: 'Rename a session',
+      description: 'Rename a tmux session.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Existing session name or id.'),
+        name: z.string().describe('New session name.'),
+      },
+    },
+    async ({ target, name, host }) => {
+      await renameSession(target, name, resolveHost(host));
+      await log('info', `renamed session ${target} -> ${name}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Renamed session ${target} -> ${name}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.rename_window',
+    {
+      title: 'Rename a window',
+      description: 'Rename a tmux window.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z.string().describe('Window target, e.g. session:window or window id.'),
+        name: z.string().describe('New window name.'),
+      },
+    },
+    async ({ target, name, host }) => {
+      await renameWindow(target, name, resolveHost(host));
+      await log('info', `renamed window ${target} -> ${name}${host ? ` on ${host}` : ''}`);
+      return { content: [{ type: 'text', text: `Renamed window ${target} -> ${name}.` }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.command',
+    {
+      title: 'Run arbitrary tmux command',
+      description:
+        'Execute any tmux subcommand with raw args. Use this when helpers do not cover your use case. You are responsible for correctness and safety.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        args: z
+          .array(z.string())
+          .nonempty()
+          .describe('Arguments to pass to tmux (do not include the tmux binary itself).'),
+        confirm: z
+          .boolean()
+          .describe('Set true if the command is destructive (kill*, attach -k, unlink-window, etc).')
+          .optional(),
+      },
+    },
+    async ({ args, host, confirm }) => {
+      const needsConfirm = args.some((a) =>
+        ['kill-', 'kill-session', 'kill-window', 'kill-pane', 'kill-server', 'unlink', 'attach -k'].some((k) =>
+          a.includes(k),
+        ),
+      );
+      if (needsConfirm && !confirm) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          'confirm=true is required for destructive tmux.command calls (kill*, unlink, attach -k)',
+        );
+      }
+      const output = await runTmux(args, resolveHost(host));
+      await log('info', `command: tmux ${args.join(' ')}`);
+      return {
+        content: [{ type: 'text', text: output || '(no output)' }],
+      };
+    },
+  );
+
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+main().catch((error) => {
+  console.error('mcp-tmux failed to start:', error);
+  process.exit(1);
+});
