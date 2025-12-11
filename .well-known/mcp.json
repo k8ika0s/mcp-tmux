@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/servers/main/schemas/mcp.json",
+  "name": "mcp-tmux",
+  "description": "Model Context Protocol server for collaborating with tmux locally or over SSH.",
+  "version": "1.0.0",
+  "homepage": "https://github.com/k8ika0s/mcp-tmux",
+  "repository": "https://github.com/k8ika0s/mcp-tmux.git",
+  "license": "AGPL-3.0-only",
+  "servers": [
+    {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["mcp-tmux"],
+      "env": {
+        "MCP_TMUX_HOST": "my-ssh-alias (optional default host)",
+        "MCP_TMUX_SESSION": "collab (optional default session)"
+      }
+    }
+  ]
+}
