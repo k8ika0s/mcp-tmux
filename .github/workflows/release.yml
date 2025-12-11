@@ -53,7 +53,7 @@ jobs:
         run: npm run build
 
       - name: Pack (npm pack)
-        run: npm pack --workspace .
+        run: npm pack
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
