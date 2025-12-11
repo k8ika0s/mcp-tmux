@@ -60,6 +60,9 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.set_sync_panes`: Toggle synchronize-panes for a window.
 - `tmux.save_layout_profile` / `tmux.apply_layout_profile`: Persist and re-apply layout profiles by name.
 - `tmux.health`: Quick health check (tmux reachable, session listing, host profile info).
+- `tmux.context_history`: Pull recent scrollback (pane or session) and extract recent commands.
+- `tmux.quickstart`: Return a concise playbook/do-don’t block for the LLM.
+- Resource: `tmux.state_resource` (URI `tmux://state/default`) returns the current default snapshot on read.
 - `tmux.list_sessions`: Enumerate sessions with window/attach counts.
 - `tmux.list_windows`: List windows (optionally scoped to a session).
 - `tmux.list_panes`: List panes (optionally scoped to a target).
@@ -99,6 +102,14 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 - Tail a pane to watch output:
   ```json
   {"name":"tmux.tail_pane","arguments":{"target":"collab:0.0","lines":200,"iterations":3,"intervalMs":1000}}
+  ```
+- Capture context history and recent commands:
+  ```json
+  {"name":"tmux.context_history","arguments":{"session":"collab","lines":800,"allPanes":true}}
+  ```
+- Quickstart playbook for the LLM:
+  ```json
+  {"name":"tmux.quickstart","arguments":{}}
   ```
 - Select window/pane and toggle sync:
   ```json

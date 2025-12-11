@@ -64,6 +64,10 @@ let defaultHost = process.env.MCP_TMUX_HOST || undefined;
 let defaultSession = process.env.MCP_TMUX_SESSION || undefined;
 let defaultWindow: string | undefined;
 let defaultPane: string | undefined;
+const defaultTargetNote = () =>
+  `Defaults -> host: ${defaultHost ?? '(unset)'}, session: ${defaultSession ?? '(unset)'}, pane: ${
+    defaultPane ?? '(unset)'
+  }`;
 
 const instructions = `
 You are connected to a tmux MCP server. Use these tools to collaborate with a human inside tmux.
@@ -501,6 +505,51 @@ async function tailPane({
   return lastCapture.trim();
 }
 
+function extractRecentCommands(text: string, max = 15) {
+  const cmds: string[] = [];
+  const lines = text.split('\n');
+  const promptPattern = /[$#>] ([^\s].*)$/;
+  for (let i = lines.length - 1; i >= 0 && cmds.length < max; i--) {
+    const line = lines[i];
+    const match = line.match(promptPattern);
+    if (match && match[1]) {
+      cmds.push(match[1]);
+    }
+  }
+  return cmds.reverse();
+}
+
+async function captureHistory({
+  host,
+  session,
+  target,
+  lines = 800,
+  allPanes = false,
+}: {
+  host?: string;
+  session?: string;
+  target?: string;
+  lines?: number;
+  allPanes?: boolean;
+}) {
+  const resolvedHost = resolveHost(host);
+  if (target) {
+    const capture = await capturePane(target, -lines, undefined, resolvedHost);
+    return { captures: [{ target, text: capture }], commands: extractRecentCommands(capture) };
+  }
+  const resolvedSession = requireSession(session);
+  const panes = await listPanes(resolvedSession, resolvedHost);
+  const targets = allPanes ? panes : panes.filter((p) => p.active);
+  const captures = await Promise.all(
+    targets.map(async (p) => ({
+      target: `${p.session}:${p.window}.${p.index}`,
+      text: await capturePane(p.id, -lines, undefined, resolvedHost),
+    })),
+  );
+  const combinedText = captures.map((c) => c.text).join('\n');
+  return { captures, commands: extractRecentCommands(combinedText) };
+}
+
 async function saveLayoutProfile(name: string, session: string, host?: string) {
   const windows = await captureLayouts(session, host);
   layoutProfiles[name] = {
@@ -562,6 +611,35 @@ async function main() {
         resources: {},
       },
       instructions,
+    },
+  );
+
+  server.registerResource(
+    'tmux.state_resource',
+    'tmux://state/default',
+    {
+      title: 'Default tmux state snapshot',
+      description: 'On read, captures current default host/session state and recent output.',
+      mimeType: 'text/plain',
+    },
+    async () => {
+      const snapshot = await buildStateSnapshot({ host: defaultHost, session: defaultSession });
+      const text = [
+        `Host: ${snapshot.host}`,
+        `Session: ${snapshot.session}`,
+        `Capture target: ${snapshot.captureTarget ?? '(none)'}`,
+        '',
+        snapshot.sessionsText,
+        '',
+        snapshot.windowsText,
+        '',
+        snapshot.panesText,
+        '',
+        snapshot.capture,
+        '',
+        defaultTargetNote(),
+      ].join('\n');
+      return { contents: [{ uri: 'tmux://state/default', text }] };
     },
   );
 
@@ -652,6 +730,7 @@ async function main() {
         host ? `Default host: ${host}` : 'Default host: local (no host set)',
         defaultSession ? `Default session: ${defaultSession}` : 'No default session detected.',
         formatSessions(sessions),
+        defaultTargetNote(),
       ].join('\n\n');
 
       return {
@@ -696,6 +775,68 @@ async function main() {
         '',
         `Capture (last ${captureLines ?? 200} lines):`,
         snapshot.capture,
+        '',
+        defaultTargetNote(),
+      ].join('\n');
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.context_history',
+    {
+      title: 'Capture recent tmux history',
+      description:
+        'Capture recent scrollback from a pane or session to infer context; also extracts recent commands heuristically.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z.string().describe('Session (optional; uses default).').optional(),
+        target: z
+          .string()
+          .describe('Pane target (pane id or session:window.pane). If omitted, uses active panes in session.')
+          .optional(),
+        lines: z.number().describe('How many lines to capture per pane.').default(800).optional(),
+        allPanes: z.boolean().describe('If true, capture all panes in the session.').default(false).optional(),
+      },
+    },
+    async ({ host, session, target, lines = 800, allPanes = false }) => {
+      const history = await captureHistory({ host, session, target, lines, allPanes });
+      const parts: string[] = [];
+      for (const c of history.captures) {
+        parts.push(`--- ${c.target} ---`);
+        parts.push(c.text);
+      }
+      parts.push('');
+      parts.push('Recent commands (heuristic):');
+      parts.push(history.commands.join('\n') || '(none)');
+      parts.push('');
+      parts.push(defaultTargetNote());
+      return { content: [{ type: 'text', text: parts.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.quickstart',
+    {
+      title: 'Quickstart instructions',
+      description: 'Returns a concise how-to for using the tmux MCP tools safely.',
+    },
+    async () => {
+      const text = [
+        'Playbook:',
+        '1) tmux.open_session (host+session)',
+        '2) tmux.default_context',
+        '3) tmux.list_windows / tmux.list_panes',
+        '4) tmux.select_window / tmux.select_pane (optional)',
+        '5) tmux.send_keys then tmux.capture_pane (or tmux.tail_pane / tmux.context_history)',
+        '6) Use tmux.capture_layout / tmux.save_layout_profile for layouts; tmux.set_sync_panes when needed.',
+        '',
+        'Safety:',
+        '- Destructive commands require confirm=true.',
+        '- Prefer helper tools over raw tmux.command.',
+        '- Always capture after sending keys; re-list panes/windows to stay in sync.',
+        '',
+        defaultTargetNote(),
       ].join('\n');
       return { content: [{ type: 'text', text }] };
     },
