@@ -1,0 +1,12 @@
+{
+  "name": "mcp-tmux",
+  "description": "Model Context Protocol server for collaborating with tmux locally or over SSH.",
+  "homepage": "https://github.com/k8ika0s/mcp-tmux",
+  "repository": "https://github.com/k8ika0s/mcp-tmux.git",
+  "license": "AGPL-3.0-only",
+  "protocol": "1.0",
+  "entry": {
+    "command": "npx",
+    "args": ["mcp-tmux"]
+  }
+}
