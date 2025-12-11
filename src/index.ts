@@ -41,6 +41,7 @@ type TmuxPane = {
 const tmuxBinary = process.env.TMUX_BIN || 'tmux';
 const tmuxFallbackPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
 const extraPath = tmuxFallbackPaths.join(':');
+const tmuxCommandTimeoutMs = Number(process.env.MCP_TMUX_TIMEOUT_MS ?? '15000');
 const hostProfilePath =
   process.env.MCP_TMUX_HOSTS_FILE ||
   path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'hosts.json');
@@ -85,8 +86,24 @@ You are connected to a tmux MCP server. Use these tools to collaborate with a hu
 - Fanout: tmux.multi_run to send the same command to multiple hosts/panes and aggregate results.
 `.trim();
 
+function assertValidHost(host?: string) {
+  if (!host) return;
+  if (host.startsWith('-')) {
+    throw new McpError(ErrorCode.InvalidParams, 'host may not start with "-" (disallowed ssh options)');
+  }
+  if (/\s/.test(host)) {
+    throw new McpError(ErrorCode.InvalidParams, 'host may not contain whitespace');
+  }
+}
+
+function sanitizePathSegment(segment: string | undefined, fallback = 'unknown') {
+  const cleaned = (segment ?? fallback).replace(/[^A-Za-z0-9_.-]/g, '_');
+  return cleaned || fallback;
+}
+
 async function runTmux(args: string[], host?: string) {
   try {
+    assertValidHost(host);
     const hostConfig = getHostProfile(host);
     const bin = hostConfig?.tmuxBin || tmuxBinary;
     const pathAdd = hostConfig?.pathAdd ?? [];
@@ -95,6 +112,7 @@ async function runTmux(args: string[], host?: string) {
     const commandArgs = host ? ['-T', host, 'env', `PATH=${basePath}`, bin, ...args] : args;
     const { stdout } = await execa(command, commandArgs, {
       env: host ? undefined : { ...process.env, PATH: basePath },
+      timeout: tmuxCommandTimeoutMs,
     });
     return stdout.trim();
   } catch (error) {
@@ -113,6 +131,30 @@ function resolveHost(host?: string) {
 
 function resolveSession(session?: string) {
   return session ?? defaultSession;
+}
+
+function resolvePaneTarget(target?: string) {
+  return target ?? defaultPane;
+}
+
+function requirePaneTarget(target?: string) {
+  const resolved = resolvePaneTarget(target);
+  if (!resolved) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'target is required (provide target or set default pane via tmux.set_default or tmux.select_pane)',
+    );
+  }
+  return resolved;
+}
+
+function isDestructiveTmuxArgs(args: string[]) {
+  if (!args.length) return false;
+  const verbs = new Set(['kill-session', 'kill-window', 'kill-pane', 'kill-server', 'unlink-window', 'unlink-pane']);
+  const first = args[0];
+  if (verbs.has(first) || first.startsWith('kill-')) return true;
+  if (first === 'attach' && args.includes('-k')) return true;
+  return false;
 }
 
 function requireHost(host?: string) {
@@ -540,8 +582,8 @@ function setAuditEnabled(host: string | undefined, session: string | undefined, 
 
 async function auditLog(host: string | undefined, session: string | undefined, event: string, meta?: unknown) {
   if (!isAuditEnabled(host, session)) return;
-  const h = host ?? defaultHost ?? 'local';
-  const s = session ?? defaultSession ?? 'unknown';
+  const h = sanitizePathSegment(host ?? defaultHost, 'local');
+  const s = sanitizePathSegment(session ?? defaultSession, 'unknown');
   const dir = path.join(logBaseDir, h, s);
   const file = path.join(dir, `audit-${isoTimestamp().slice(0, 10)}.log`);
   await fs.mkdir(dir, { recursive: true });
@@ -556,8 +598,8 @@ function getSessionFromTarget(target: string | undefined) {
 }
 
 async function appendSessionLog(host: string | undefined, session: string | undefined, message: string) {
-  const h = host ?? defaultHost ?? 'local';
-  const s = session ?? defaultSession ?? 'unknown';
+  const h = sanitizePathSegment(host ?? defaultHost, 'local');
+  const s = sanitizePathSegment(session ?? defaultSession, 'unknown');
   const dir = path.join(logBaseDir, h, s);
   const file = path.join(dir, `${isoTimestamp().slice(0, 10)}.log`);
   await fs.mkdir(dir, { recursive: true });
@@ -597,7 +639,8 @@ async function captureHistory({
 
 async function listDirSimple(dir: string, host?: string) {
   if (host) {
-    const { stdout } = await execa('ssh', ['-T', host, 'ls', '-1', dir]);
+    assertValidHost(host);
+    const { stdout } = await execa('ssh', ['-T', host, 'ls', '-1', dir], { timeout: tmuxCommandTimeoutMs });
     return stdout.split('\n').filter(Boolean);
   }
   const entries = await fs.readdir(dir);
@@ -1089,15 +1132,23 @@ async function main() {
       description: 'Poll a pane multiple times to watch output without reissuing commands.',
       inputSchema: {
         host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
-        target: z.string().describe('Pane target to tail (pane id or session:window.pane).'),
+        target: z
+          .string()
+          .describe('Pane target to tail (pane id or session:window.pane). If omitted, uses default pane if set.')
+          .optional(),
         lines: z.number().describe('How many lines per fetch.').default(200).optional(),
         iterations: z.number().describe('How many polling iterations.').default(3).optional(),
         intervalMs: z.number().describe('Delay between polls in milliseconds.').default(1000).optional(),
       },
     },
     async ({ host, target, lines = 200, iterations = 3, intervalMs = 1000 }) => {
-      const tailText = await tailPane({ host, target, lines, iterations, intervalMs });
-      await appendSessionLog(resolveHost(host), getSessionFromTarget(target), `tail_pane ${target} lines=${lines}`);
+      const resolvedTarget = requirePaneTarget(target);
+      const tailText = await tailPane({ host, target: resolvedTarget, lines, iterations, intervalMs });
+      await appendSessionLog(
+        resolveHost(host),
+        getSessionFromTarget(resolvedTarget),
+        `tail_pane ${resolvedTarget} lines=${lines}`,
+      );
       return { content: [{ type: 'text', text: tailText || '(no output)' }] };
     },
   );
@@ -1109,7 +1160,10 @@ async function main() {
       description: 'Create a task to poll pane output over time. Client can poll for incremental results.',
       inputSchema: {
         host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
-        target: z.string().describe('Pane target to tail (pane id or session:window.pane).'),
+        target: z
+          .string()
+          .describe('Pane target to tail (pane id or session:window.pane). If omitted, uses default pane if set.')
+          .optional(),
         lines: z.number().describe('How many lines per fetch.').default(200).optional(),
         intervalMs: z.number().describe('Delay between polls in milliseconds.').default(1500).optional(),
         iterations: z.number().describe('How many polling iterations before auto-complete.').default(5).optional(),
@@ -1121,19 +1175,20 @@ async function main() {
         { host, target, lines = 200, intervalMs = 1500, iterations = 5 }: any,
         { taskStore }: any,
       ) {
+        const resolvedTarget = requirePaneTarget(target);
         const task = await taskStore.createTask({});
         (async () => {
           const resolvedHost = resolveHost(host);
           const parts: string[] = [];
           for (let i = 0; i < iterations; i++) {
-            const capture = await capturePane(target, -lines, undefined, resolvedHost);
+            const capture = await capturePane(resolvedTarget, -lines, undefined, resolvedHost);
             parts.push(`Iteration ${i + 1}/${iterations}`);
             parts.push(capture || '(empty)');
             if (i < iterations - 1) {
               await new Promise((r) => setTimeout(r, intervalMs));
             }
           }
-          const finalCapture = await capturePane(target, -lines, undefined, resolvedHost);
+          const finalCapture = await capturePane(resolvedTarget, -lines, undefined, resolvedHost);
           parts.push('Final:');
           parts.push(finalCapture || '(empty)');
           await taskStore.storeTaskResult(task.taskId, 'completed', {
@@ -1275,7 +1330,10 @@ async function main() {
       description: 'Poll a pane for a regex pattern and complete when matched or after iterations.',
       inputSchema: {
         host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
-        target: z.string().describe('Pane target to watch (pane id or session:window.pane).'),
+        target: z
+          .string()
+          .describe('Pane target to watch (pane id or session:window.pane). If omitted, uses default pane if set.')
+          .optional(),
         pattern: z.string().describe('Regex pattern to search for.'),
         flags: z.string().describe('Regex flags (e.g., i)').optional(),
         lines: z.number().describe('Lines per fetch.').default(400).optional(),
@@ -1289,12 +1347,13 @@ async function main() {
         { host, target, pattern, flags, lines = 400, intervalMs = 1500, iterations = 8 }: any,
         { taskStore }: any,
       ) {
+        const resolvedTarget = requirePaneTarget(target);
         const task = await taskStore.createTask({});
         (async () => {
           const resolvedHost = resolveHost(host);
           const regex = new RegExp(pattern, flags);
           for (let i = 0; i < iterations; i++) {
-            const capture = await capturePane(target, -lines, undefined, resolvedHost);
+            const capture = await capturePane(resolvedTarget, -lines, undefined, resolvedHost);
             if (regex.test(capture)) {
               await taskStore.storeTaskResult(task.taskId, 'completed', {
                 content: [{ type: 'text', text: `Pattern matched on iteration ${i + 1}.\n${capture}` }],
@@ -1305,7 +1364,7 @@ async function main() {
               await new Promise((r) => setTimeout(r, intervalMs));
             }
           }
-          const finalCapture = await capturePane(target, -lines, undefined, resolvedHost);
+          const finalCapture = await capturePane(resolvedTarget, -lines, undefined, resolvedHost);
           await taskStore.storeTaskResult(task.taskId, 'completed', {
             content: [
               {
@@ -1516,7 +1575,10 @@ async function main() {
       description: 'Read the scrollback of a pane to observe command results.',
       inputSchema: {
         host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
-        target: z.string().describe('Pane target (e.g. session:window.pane or pane id).'),
+        target: z
+          .string()
+          .describe('Pane target (pane id or session:window.pane). If omitted, uses default pane if set.')
+          .optional(),
         start: z
           .number()
           .describe('Optional start line offset (e.g. -200 for last 200 lines). Defaults to -200.')
@@ -1525,9 +1587,10 @@ async function main() {
       },
     },
     async ({ target, start, end, host }) => {
-      const output = await capturePane(target, start, end, resolveHost(host));
-      await auditLog(resolveHost(host), getSessionFromTarget(target), 'capture_pane', {
-        target,
+      const resolvedTarget = requirePaneTarget(target);
+      const output = await capturePane(resolvedTarget, start, end, resolveHost(host));
+      await auditLog(resolveHost(host), getSessionFromTarget(resolvedTarget), 'capture_pane', {
+        target: resolvedTarget,
         start,
         end,
         length: output.length,
@@ -1545,19 +1608,31 @@ async function main() {
       description: 'Send keystrokes to a tmux target, optionally appending Enter.',
       inputSchema: {
         host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
-        target: z.string().describe('Pane target (pane id or session:window.pane).'),
+        target: z
+          .string()
+          .describe('Pane target (pane id or session:window.pane). If omitted, uses default pane if set.')
+          .optional(),
         keys: z.string().describe('The exact text/keys to send.'),
         enter: z.boolean().describe('Append Enter after the keys.').default(true).optional(),
       },
     },
     async ({ target, keys, enter = true, host }) => {
       const resolvedHost = resolveHost(host);
-      await sendKeys(target, keys, enter, resolvedHost);
-      await log('debug', `send-keys to ${target}${resolvedHost ? ` on ${resolvedHost}` : ''}: "${keys}"`);
-      await auditLog(resolvedHost, getSessionFromTarget(target), 'send_keys', { target, keys, enter });
-      await appendSessionLog(resolvedHost, getSessionFromTarget(target), `send-keys "${keys}" enter=${enter}`);
+      const resolvedTarget = requirePaneTarget(target);
+      await sendKeys(resolvedTarget, keys, enter, resolvedHost);
+      await log('debug', `send-keys to ${resolvedTarget}${resolvedHost ? ` on ${resolvedHost}` : ''}: "${keys}"`);
+      await auditLog(resolvedHost, getSessionFromTarget(resolvedTarget), 'send_keys', {
+        target: resolvedTarget,
+        keys,
+        enter,
+      });
+      await appendSessionLog(
+        resolvedHost,
+        getSessionFromTarget(resolvedTarget),
+        `send-keys "${keys}" enter=${enter}`,
+      );
       return {
-        content: [{ type: 'text', text: `Sent keys to ${target}${enter ? ' (with Enter)' : ''}.` }],
+        content: [{ type: 'text', text: `Sent keys to ${resolvedTarget}${enter ? ' (with Enter)' : ''}.` }],
       };
     },
   );
@@ -1770,11 +1845,7 @@ async function main() {
       },
     },
     async ({ args, host, confirm }) => {
-      const needsConfirm = args.some((a) =>
-        ['kill-', 'kill-session', 'kill-window', 'kill-pane', 'kill-server', 'unlink', 'attach -k'].some((k) =>
-          a.includes(k),
-        ),
-      );
+      const needsConfirm = isDestructiveTmuxArgs(args);
       if (needsConfirm && !confirm) {
         throw new McpError(
           ErrorCode.InvalidParams,

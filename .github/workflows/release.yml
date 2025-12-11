@@ -1,0 +1,72 @@
+name: Release (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm (set false to just build and pack)"
+        required: false
+        default: "false"
+      tag:
+        description: "Optional git ref/tag to release (defaults to main)"
+        required: false
+        default: "main"
+      version:
+        description: "Optional version to set before building (e.g. 1.2.3)."
+        required: false
+        default: ""
+      bump:
+        description: "Optional semver bump to apply if version is not provided (patch|minor|major)."
+        required: false
+        default: ""
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || 'main' }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      - name: Set version (optional)
+        if: ${{ github.event.inputs.version != '' }}
+        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
+
+      - name: Bump version (optional)
+        if: ${{ github.event.inputs.version == '' && github.event.inputs.bump != '' }}
+        run: npm version ${{ github.event.inputs.bump }} --no-git-tag-version
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack (npm pack)
+        run: npm pack --workspace .
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package-tarball
+          path: "*.tgz"
+
+      - name: Warn if publish requested but no NPM_TOKEN
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN != 'true' }}
+        run: echo "::warning::Publish requested but NPM_TOKEN is not set; skipping npm publish."
+
+      - name: Publish to npm
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN == 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
