@@ -12,15 +12,17 @@ import { InMemoryTaskStore, InMemoryTaskMessageQueue } from '@modelcontextprotoc
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const VERSION: string = (() => {
+const PKG_META: { version: string; name: string } = (() => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pkg = require('../package.json');
-    return pkg.version as string;
+    return { version: pkg.version as string, name: pkg.name as string };
   } catch {
-    return process.env.npm_package_version ?? 'unknown';
+    return { version: process.env.npm_package_version ?? 'unknown', name: 'mcp-tmux' };
   }
 })();
+const VERSION = PKG_META.version;
+const PACKAGE_NAME = PKG_META.name;
 
 type TmuxSession = {
   id: string;
@@ -848,7 +850,7 @@ async function main() {
   const server = new McpServer(
     {
       name: 'mcp-tmux',
-      version: '1.0.0',
+      version: VERSION,
       websiteUrl: 'https://github.com/k8ika0s/mcp-tmux',
       title: 'tmux MCP server',
     },
@@ -1147,6 +1149,18 @@ async function main() {
         '',
         defaultTargetNote(),
       ].join('\n');
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
+    'tmux.server_info',
+    {
+      title: 'Server info and version',
+      description: 'Return the running server version and package identifier for verification.',
+    },
+    async () => {
+      const text = [`Package: ${PACKAGE_NAME}`, `Version: ${VERSION}`, `Log dir: ${logBaseDir}`].join('\n');
       return { content: [{ type: 'text', text }] };
     },
   );
