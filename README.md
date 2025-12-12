@@ -11,6 +11,8 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/Node-%3E%3D18-blue.svg)](https://nodejs.org)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-025E8C?logo=dependabot)](https://github.com/k8ika0s/mcp-tmux/pulls?q=is%3Apr+author%3Aapp%2Fdependabot)
+[![npm](https://img.shields.io/npm/v/@k8ika0s/mcp-tmux?color=cb0000&label=@k8ika0s%2Fmcp-tmux)](https://www.npmjs.com/package/@k8ika0s/mcp-tmux)
+[![MCP Registry](https://img.shields.io/badge/MCP%20Registry-ready-brightgreen)](https://registry.modelcontextprotocol.io/)
 
 ## Table of Contents
 - [Quickstart (2 minutes)](#quickstart-2-minutes)
