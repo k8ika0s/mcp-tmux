@@ -84,6 +84,15 @@ jobs:
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN != 'true' }}
         run: echo "::warning::Publish requested but NPM_TOKEN is not set; skipping npmjs publish."
 
+      - name: Configure npm for npmjs
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN == 'true' }}
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+          echo "always-auth=true" >> ~/.npmrc
+          npm config set registry https://registry.npmjs.org
+
       - name: Publish to npmjs
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN == 'true' }}
         env:
