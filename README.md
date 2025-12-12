@@ -259,7 +259,7 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 ## CI, security, and governance
 - CI: GitHub Actions (`CI` workflow) runs `npm run build`.
 - Security: dependency audit job (`npm audit --audit-level=high`) runs in CI.
-- Release: manual workflow `Release (manual)` (workflow dispatch) builds and packs. Inputs: `publish`, `tag`, `version`, `bump`. Publishes to npmjs when `publish=true` and `NPM_TOKEN` is set; attempts GitHub Packages publish only if the package name is scoped to `@<owner>/...` (otherwise it skips with a warning).
+- Release: manual workflow `Release (manual)` builds, packs, and can publish. Inputs: `publish`, `tag`, `version`, `bump`. When `publish=true`, it publishes to npmjs (requires `NPM_TOKEN`), attempts GitHub Packages only if the package name is scoped to `@k8ika0s/...` (warns/skip otherwise), and creates a git tag plus GitHub Release with the tarball.
 - Branch protection (intended): main should be protected (require PR, no branch deletion). Configure this in repository settings.
 - Ownership: CODEOWNERS assigns all files to @k8ika0s.
 - Project stats: TypeScript, Node >=18, publishes `mcp-tmux` CLI entrypoint, MCP stdio server.
