@@ -16,6 +16,9 @@
     "mcp-server",
     "tmux",
     "claude",
+    "openai",
+    "chatgpt",
+    "codex",
     "model context protocol"
   ],
   "scripts": {
@@ -28,7 +31,6 @@
     "type": "git",
     "url": "git+https://github.com/k8ika0s/mcp-tmux.git"
   },
-  "keywords": [],
   "author": "",
   "license": "AGPL-3.0-only",
   "bugs": {

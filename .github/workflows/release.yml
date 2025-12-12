@@ -58,6 +58,24 @@ jobs:
         if: ${{ github.event.inputs.version == '' && github.event.inputs.bump != '' }}
         run: npm version ${{ github.event.inputs.bump }} --no-git-tag-version
 
+      - name: Sync server.json version
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkg = require('./package.json');
+          const path = './server.json';
+          if (!fs.existsSync(path)) process.exit(0);
+          const server = JSON.parse(fs.readFileSync(path, 'utf8'));
+          server.version = pkg.version;
+          if (Array.isArray(server.packages)) {
+            server.packages = server.packages.map(p => ({
+              ...p,
+              version: pkg.version
+            }));
+          }
+          fs.writeFileSync(path, JSON.stringify(server, null, 2));
+          NODE
+
       - name: Build
         run: npm run build
 
