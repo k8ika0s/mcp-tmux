@@ -44,7 +44,7 @@ npm run build
 ```
 2) Run with sensible defaults:
 ```bash
-MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx mcp-tmux
+MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx @k8ika0s/mcp-tmux
 ```
 3) In your MCP client, call:
 ```
@@ -77,7 +77,7 @@ tmux.open_session → tmux.default_context → tmux.list_windows / tmux.list_pan
 ```bash
 npm install
 npm run build
-MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx mcp-tmux  # optional defaults
+MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx @k8ika0s/mcp-tmux  # optional defaults
 ```
 
 During development you can use hot reload:
@@ -92,7 +92,7 @@ Add to your MCP client config (example for Claude Desktop/CLI style):
   "servers": {
     "tmux": {
       "command": "npx",
-      "args": ["mcp-tmux"],
+      "args": ["@k8ika0s/mcp-tmux"],
       "env": {
         "MCP_TMUX_HOST": "my-ssh-alias",   // optional default host
         "MCP_TMUX_SESSION": "collab"       // optional default session
@@ -259,11 +259,7 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
 ## CI, security, and governance
 - CI: GitHub Actions (`CI` workflow) runs `npm run build`.
 - Security: dependency audit job (`npm audit --audit-level=high`) runs in CI.
-- Release: manual workflow `Release (manual)` (workflow dispatch) builds and packs. Inputs:
-  - `publish=true|false` (skips publish if no `NPM_TOKEN`, emits warning)
-  - `tag` (ref to release, default main)
-  - `version` (set explicit version via `npm version <ver> --no-git-tag-version`)
-  - `bump` (semver bump `patch|minor|major` if `version` is not provided)
+- Release: manual workflow `Release (manual)` (workflow dispatch) builds and packs. Inputs: `publish`, `tag`, `version`, `bump`. Publishes to npmjs when `publish=true` and `NPM_TOKEN` is set; attempts GitHub Packages publish only if the package name is scoped to `@<owner>/...` (otherwise it skips with a warning).
 - Branch protection (intended): main should be protected (require PR, no branch deletion). Configure this in repository settings.
 - Ownership: CODEOWNERS assigns all files to @k8ika0s.
 - Project stats: TypeScript, Node >=18, publishes `mcp-tmux` CLI entrypoint, MCP stdio server.

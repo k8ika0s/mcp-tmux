@@ -10,7 +10,7 @@
     {
       "transport": "stdio",
       "command": "npx",
-      "args": ["mcp-tmux"],
+      "args": ["@k8ika0s/mcp-tmux"],
       "env": {
         "MCP_TMUX_HOST": "my-ssh-alias (optional default host)",
         "MCP_TMUX_SESSION": "collab (optional default session)"
