@@ -1761,37 +1761,19 @@ async function main() {
       const separator = failFast ? '&&' : ';';
       const joined = commands.join(` ${separator} `);
 
-      // Run as a single executeCommand to reuse marker tracking
-      const commandId = await tmux.executeCommand(resolvedTarget, joined, false, false);
-      const resourceUri = `tmux://command/${commandId}/result`;
+      // Send once, capture once (faster than multiple calls)
+      await sendKeys(resolvedTarget, joined, true, resolvedHost);
+      await new Promise((r) => setTimeout(r, 300)); // allow output to flush
+      const output = await capturePane(resolvedTarget, -captureLines, undefined, resolvedHost);
 
-      // Try a short poll to return inline output when quick; otherwise point to resource
-      let finalText: string | null = null;
-      for (let i = 0; i < 5; i++) {
-        const state = await tmux.checkCommandStatus(commandId);
-        if (state && state.status !== 'pending') {
-          finalText = `Status: ${state.status}\nExit code: ${state.exitCode}\nCommand: ${state.command}\n\n--- Output ---\n${state.result}`;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 200));
-      }
+      const text = [
+        `Commands: ${commands.join(' | ')}`,
+        `Target: ${resolvedTarget}${resolvedHost ? ` on ${resolvedHost}` : ''}`,
+        '',
+        output || '(no output)',
+      ].join('\n');
 
-      if (finalText) {
-        return { content: [{ type: 'text', text: finalText }] };
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: [
-              `Batch started (commands joined with "${separator}") in ${resolvedTarget}.`,
-              `To retrieve results, subscribe/read: ${resourceUri}`,
-              `Status will update when complete.`,
-            ].join('\n'),
-          },
-        ],
-      };
+      return { content: [{ type: 'text', text }] };
     },
   );
 
