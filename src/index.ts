@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execa } from 'execa';
+import { parseArgs } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -8,6 +9,18 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { InMemoryTaskStore, InMemoryTaskMessageQueue } from '@modelcontextprotocol/sdk/experimental/tasks/stores/in-memory.js';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const VERSION: string = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pkg = require('../package.json');
+    return pkg.version as string;
+  } catch {
+    return process.env.npm_package_version ?? 'unknown';
+  }
+})();
 
 type TmuxSession = {
   id: string;
@@ -285,13 +298,37 @@ async function capturePane(target: string, start?: number, end?: number, host?: 
 }
 
 async function sendKeys(target: string, keys: string, enter?: boolean, host?: string) {
-  if (!keys || !keys.trim()) {
-    throw new McpError(ErrorCode.InvalidParams, 'keys must be non-empty');
+  const specialMap: Record<string, string> = {
+    '<SPACE>': 'Space',
+    '<TAB>': 'Tab',
+    '<ESC>': 'Escape',
+    '<ENTER>': 'Enter',
+  };
+
+  // Allow empty when enter=true (send Enter only)
+  const trimmed = keys?.trim() ?? '';
+  if (!keys && enter) {
+    await runTmux(['send-keys', '-t', target, 'Enter'], host);
+    return;
   }
-  const args = ['send-keys', '-t', target, '--', keys];
-  if (enter) {
+  if (!keys && !enter) {
+    throw new McpError(ErrorCode.InvalidParams, 'keys must be non-empty or enter=true to send Enter');
+  }
+
+  const mapped = specialMap[keys] || specialMap[trimmed] || null;
+  const args = ['send-keys', '-t', target, '--'];
+
+  if (mapped) {
+    args.push(mapped);
+  } else {
+    // Permit whitespace (e.g., single space)
+    args.push(keys);
+  }
+
+  if (enter && mapped !== 'Enter') {
     args.push('Enter');
   }
+
   await runTmux(args, host);
 }
 
@@ -790,6 +827,18 @@ async function setSyncPanes(target: string, on: boolean, host?: string) {
 }
 
 async function main() {
+  const { values } = parseArgs({
+    options: {
+      'shell-type': { type: 'string', default: 'bash', short: 's' },
+      version: { type: 'boolean', default: false, short: 'v' },
+    },
+  });
+
+  if (values.version) {
+    console.log(VERSION);
+    return;
+  }
+
   await loadHostProfiles();
   await loadLayoutProfiles();
   await ensureLocalTmuxAvailable();
@@ -918,6 +967,7 @@ async function main() {
       const text = existed
         ? `Reconnected to remote session ${session} on ${host}. Attach with: ${attachHint}`
         : `Created remote session ${session} on ${host}. Attach with: ${attachHint}`;
+      await appendSessionLog(host, session, `mcp-tmux ${VERSION} ${existed ? 'reconnected' : 'created'} session`);
       return { content: [{ type: 'text', text }] };
     },
   );
