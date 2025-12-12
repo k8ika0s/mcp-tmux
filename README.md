@@ -44,7 +44,7 @@ npm run build
 ```
 2) Run with sensible defaults:
 ```bash
-MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx mcp-tmux
+MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx @k8ika0s/mcp-tmux
 ```
 3) In your MCP client, call:
 ```
@@ -77,7 +77,7 @@ tmux.open_session → tmux.default_context → tmux.list_windows / tmux.list_pan
 ```bash
 npm install
 npm run build
-MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx mcp-tmux  # optional defaults
+MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx @k8ika0s/mcp-tmux  # optional defaults
 ```
 
 During development you can use hot reload:
@@ -92,7 +92,7 @@ Add to your MCP client config (example for Claude Desktop/CLI style):
   "servers": {
     "tmux": {
       "command": "npx",
-      "args": ["mcp-tmux"],
+      "args": ["@k8ika0s/mcp-tmux"],
       "env": {
         "MCP_TMUX_HOST": "my-ssh-alias",   // optional default host
         "MCP_TMUX_SESSION": "collab"       // optional default session
