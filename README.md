@@ -81,6 +81,9 @@ tmux.open_session → tmux.default_context → tmux.list_windows / tmux.list_pan
 npm install
 npm run build
 MCP_TMUX_HOST=my-ssh-alias MCP_TMUX_SESSION=collab npx @k8ika0s/mcp-tmux  # optional defaults
+
+# Version check
+mcp-tmux --version
 ```
 
 During development you can use hot reload:
@@ -121,6 +124,7 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.readonly_state`: Snapshot sessions/windows/panes/capture without touching defaults.
 - `tmux.batch_capture`: Capture multiple panes in parallel for faster context gathering.
 - `tmux.run_batch`: Run multiple commands in one call in the same pane (uses `&&` by default, or `;` when `failFast=false`).
+- `tmux.send_keys`: Send keys (supports `<SPACE>`, `<ENTER>`, `<TAB>`, `<ESC>` tokens; empty + `enter=true` sends Enter).
 - `tmux.health`: Quick health check (tmux reachable, session listing, host profile info).
 - `tmux.context_history`: Pull recent scrollback (pane or session) and extract recent commands.
 - `tmux.quickstart`: Return a concise playbook/do-don’t block for the LLM.
@@ -235,6 +239,7 @@ Use Supergateway and (optionally) ngrok to expose the MCP stdio server to ChatGP
 1) Install globally:
 ```bash
 npm i -g @k8ika0s/mcp-tmux
+mcp-tmux --version  # verify version
 ```
 2) Run Supergateway locally:
 ```bash

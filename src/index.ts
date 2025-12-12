@@ -90,13 +90,15 @@ const isoTimestamp = () => new Date().toISOString();
 const instructions = `
 You are connected to a tmux MCP server. Use these tools to collaborate with a human inside tmux.
 
-- Playbook: (1) tmux.open_session (host+session), (2) tmux.default_context, (3) tmux.list_windows/panes, (4) tmux.send_keys then tmux.capture_pane, (5) repeat.
+- Playbook: (1) tmux.open_session (host+session), (2) tmux.default_context, (3) tmux.list_windows/panes, (4) tmux.send_keys or tmux.run_batch, then tmux.capture_pane, (5) repeat.
 - Targets: session, session:window, session:window.pane, or IDs. Use tmux.set_default to pin host/session/window/pane.
 - Remote: provide host (ssh alias) + session or set MCP_TMUX_HOST/MCP_TMUX_SESSION. Server runs tmux via ssh -T <host> tmux ....
 - Safety: destructive tools require confirm=true; prefer tmux.command only when helpers don’t cover it.
 - After sending keys, always capture-pane to read output; re-list panes/windows to stay in sync.
 - Helpers: tmux.tail_pane (poll output), tmux.capture_layout/tmux.restore_layout (save/apply layouts), host profiles via MCP_TMUX_HOSTS_FILE for per-host PATH/tmux bin defaults.
 - Fanout: tmux.multi_run to send the same command to multiple hosts/panes and aggregate results.
+- Batching: tmux.run_batch runs multiple commands in one call; tmux.batch_capture gathers multiple panes in one call (readonly).
+- Keys: tmux.send_keys accepts <SPACE>/<ENTER>/<TAB>/<ESC> tokens; empty keys with enter=true will send Enter.
 `.trim();
 
 function assertValidHost(host?: string) {
@@ -1754,7 +1756,9 @@ async function main() {
           .string()
           .describe('Pane target (pane id or session:window.pane). If omitted, uses default pane if set.')
           .optional(),
-        keys: z.string().describe('The exact text/keys to send.'),
+        keys: z
+          .string()
+          .describe('The text/keys to send. Supports <SPACE>/<ENTER>/<TAB>/<ESC>. Empty + enter=true sends Enter.'),
         enter: z.boolean().describe('Append Enter after the keys.').default(true).optional(),
       },
     },
