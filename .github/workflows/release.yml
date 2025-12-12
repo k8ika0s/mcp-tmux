@@ -27,6 +27,8 @@ permissions:
 env:
   NODE_VERSION: 20
   HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+  HAS_UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN != '' }}
+  HAS_MCPREGISTRY_TOKEN: ${{ secrets.MCPREGISTRY_REGISTRY_TOKEN != '' }}
 
 jobs:
   release:
@@ -112,9 +114,11 @@ jobs:
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Create version bump branch and PR (if version changed)
-        if: ${{ github.event.inputs.publish == 'true' }}
+        id: bump_pr
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+          GH_TOKEN: ${{ secrets.UPDATE_TOKEN }}
         run: |
           if git diff --quiet; then
             echo "No version changes to commit."
@@ -122,6 +126,8 @@ jobs:
           fi
           VERSION=$(node -p "require('./package.json').version")
           BRANCH="auto/version-${VERSION}-${GITHUB_RUN_ID}"
+          git config url."https://x-access-token:${UPDATE_TOKEN}@github.com/".insteadOf https://github.com/
+          git remote set-url origin "https://x-access-token:${UPDATE_TOKEN}@github.com/${GITHUB_REPOSITORY}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
@@ -129,10 +135,35 @@ jobs:
           git commit -m "chore: bump version to ${VERSION}"
           git push origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" --title "chore: bump version to ${VERSION}" --body "Automated version bump from release workflow." || echo "::warning::PR creation skipped (permissions or PR already exists)"
+          PR_NUMBER=$(gh pr view --head "$BRANCH" --json number --jq '.number' || true)
+          PR_URL=$(gh pr view --head "$BRANCH" --json url --jq '.url' || true)
+          if [ -n "$PR_NUMBER" ]; then
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Auto-approve and merge version bump PR
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN == 'true' && steps.bump_pr.outputs.pr_number != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+        run: |
+          PR="${{ steps.bump_pr.outputs.pr_number }}"
+          echo "Approving PR #${PR}"
+          gh pr review "$PR" --approve || echo "::warning::Approval skipped (permissions or already approved)"
+          echo "Merging PR #${PR}"
+          gh pr merge "$PR" --merge --delete-branch || echo "::warning::Merge skipped (permissions or already merged)"
+
+      - name: Warn if publish requested but no UPDATE_TOKEN
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN != 'true' }}
+        run: echo "::warning::Publish requested but UPDATE_TOKEN is not set; skipping version bump PR and release tagging."
 
       - name: Warn if publish requested but no NPM_TOKEN
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN != 'true' }}
         run: echo "::warning::Publish requested but NPM_TOKEN is not set; skipping npmjs publish."
+
+      - name: Warn if publish requested but no MCP registry token
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_MCPREGISTRY_TOKEN != 'true' }}
+        run: echo "::warning::Publish requested but MCPREGISTRY_REGISTRY_TOKEN is not set; skipping MCP registry publish."
 
       - name: Configure npm for npmjs
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN == 'true' }}
@@ -177,12 +208,15 @@ jobs:
         run: npm publish --registry=https://npm.pkg.github.com
 
       - name: Create tag and GitHub release
-        if: ${{ github.event.inputs.publish == 'true' }}
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+          GH_TOKEN: ${{ secrets.UPDATE_TOKEN }}
         run: |
           TAG="v${{ steps.meta.outputs.version }}"
           TAR="${{ steps.meta.outputs.tarball }}"
+          git config url."https://x-access-token:${UPDATE_TOKEN}@github.com/".insteadOf https://github.com/
+          git remote set-url origin "https://x-access-token:${UPDATE_TOKEN}@github.com/${GITHUB_REPOSITORY}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
@@ -198,3 +232,10 @@ jobs:
           else
             gh release create "$TAG" "$TAR" --title "$TAG" --notes "Automated release $TAG"
           fi
+
+      - name: Publish to MCP Registry
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_MCPREGISTRY_TOKEN == 'true' }}
+        env:
+          MCPREGISTRY_REGISTRY_TOKEN: ${{ secrets.MCPREGISTRY_REGISTRY_TOKEN }}
+          MCPREGISTRY_GITHUB_TOKEN: ${{ secrets.MCPREGISTRY_GITHUB_TOKEN != '' && secrets.MCPREGISTRY_GITHUB_TOKEN || secrets.UPDATE_TOKEN }}
+        run: npx --yes mcp-publish publish
