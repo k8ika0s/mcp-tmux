@@ -1,0 +1,99 @@
+name: Release (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to registries (npmjs, GitHub Packages when applicable)"
+        required: false
+        default: "false"
+      tag:
+        description: "Optional git ref/tag to release (default main)"
+        required: false
+        default: "main"
+      version:
+        description: "Optional version to set before building (e.g. 1.2.3)"
+        required: false
+        default: ""
+      bump:
+        description: "Optional semver bump if version is not provided (patch|minor|major)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  NODE_VERSION: 20
+  HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || 'main' }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Set version (optional)
+        if: ${{ github.event.inputs.version != '' }}
+        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
+
+      - name: Bump version (optional)
+        if: ${{ github.event.inputs.version == '' && github.event.inputs.bump != '' }}
+        run: npm version ${{ github.event.inputs.bump }} --no-git-tag-version
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack (npm pack)
+        run: npm pack
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package-tarball
+          path: "*.tgz"
+
+      - name: Read package name
+        id: pkg
+        run: echo "name=$(node -p \"require('./package.json').name\")" >> "$GITHUB_OUTPUT"
+
+      - name: Warn if publish requested but no NPM_TOKEN
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN != 'true' }}
+        run: echo "::warning::Publish requested but NPM_TOKEN is not set; skipping npmjs publish."
+
+      - name: Publish to npmjs
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN == 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --registry=https://registry.npmjs.org
+
+      - name: Check GitHub Packages scope
+        id: gpr
+        run: |
+          NAME="${{ steps.pkg.outputs.name }}"
+          OWNER="@${{ github.repository_owner }}/"
+          if [[ "$NAME" == "$OWNER"* ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Skipping GitHub Packages publish: package name '$NAME' is not scoped to @${{ github.repository_owner }}/"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to GitHub Packages
+        if: ${{ github.event.inputs.publish == 'true' && steps.gpr.outputs.ok == 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm publish --registry=https://npm.pkg.github.com
