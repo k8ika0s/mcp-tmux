@@ -27,6 +27,7 @@ permissions:
 env:
   NODE_VERSION: 20
   HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+  HAS_UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN != '' }}
 
 jobs:
   release:
@@ -112,9 +113,10 @@ jobs:
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Create version bump branch and PR (if version changed)
-        if: ${{ github.event.inputs.publish == 'true' }}
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+          GH_TOKEN: ${{ secrets.UPDATE_TOKEN }}
         run: |
           if git diff --quiet; then
             echo "No version changes to commit."
@@ -122,6 +124,8 @@ jobs:
           fi
           VERSION=$(node -p "require('./package.json').version")
           BRANCH="auto/version-${VERSION}-${GITHUB_RUN_ID}"
+          git config url."https://x-access-token:${UPDATE_TOKEN}@github.com/".insteadOf https://github.com/
+          git remote set-url origin "https://x-access-token:${UPDATE_TOKEN}@github.com/${GITHUB_REPOSITORY}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
@@ -129,6 +133,10 @@ jobs:
           git commit -m "chore: bump version to ${VERSION}"
           git push origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" --title "chore: bump version to ${VERSION}" --body "Automated version bump from release workflow." || echo "::warning::PR creation skipped (permissions or PR already exists)"
+
+      - name: Warn if publish requested but no UPDATE_TOKEN
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN != 'true' }}
+        run: echo "::warning::Publish requested but UPDATE_TOKEN is not set; skipping version bump PR and release tagging."
 
       - name: Warn if publish requested but no NPM_TOKEN
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN != 'true' }}
@@ -177,12 +185,15 @@ jobs:
         run: npm publish --registry=https://npm.pkg.github.com
 
       - name: Create tag and GitHub release
-        if: ${{ github.event.inputs.publish == 'true' }}
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+          GH_TOKEN: ${{ secrets.UPDATE_TOKEN }}
         run: |
           TAG="v${{ steps.meta.outputs.version }}"
           TAR="${{ steps.meta.outputs.tarball }}"
+          git config url."https://x-access-token:${UPDATE_TOKEN}@github.com/".insteadOf https://github.com/
+          git remote set-url origin "https://x-access-token:${UPDATE_TOKEN}@github.com/${GITHUB_REPOSITORY}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
