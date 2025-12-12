@@ -28,6 +28,7 @@ env:
   NODE_VERSION: 20
   HAS_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
   HAS_UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN != '' }}
+  HAS_MCPREGISTRY_TOKEN: ${{ secrets.MCPREGISTRY_REGISTRY_TOKEN != '' }}
 
 jobs:
   release:
@@ -160,6 +161,10 @@ jobs:
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN != 'true' }}
         run: echo "::warning::Publish requested but NPM_TOKEN is not set; skipping npmjs publish."
 
+      - name: Warn if publish requested but no MCP registry token
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_MCPREGISTRY_TOKEN != 'true' }}
+        run: echo "::warning::Publish requested but MCPREGISTRY_REGISTRY_TOKEN is not set; skipping MCP registry publish."
+
       - name: Configure npm for npmjs
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN == 'true' }}
         env:
@@ -227,3 +232,10 @@ jobs:
           else
             gh release create "$TAG" "$TAR" --title "$TAG" --notes "Automated release $TAG"
           fi
+
+      - name: Publish to MCP Registry
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_MCPREGISTRY_TOKEN == 'true' }}
+        env:
+          MCPREGISTRY_REGISTRY_TOKEN: ${{ secrets.MCPREGISTRY_REGISTRY_TOKEN }}
+          MCPREGISTRY_GITHUB_TOKEN: ${{ secrets.MCPREGISTRY_GITHUB_TOKEN != '' && secrets.MCPREGISTRY_GITHUB_TOKEN || secrets.UPDATE_TOKEN }}
+        run: npx --yes mcp-publish publish
