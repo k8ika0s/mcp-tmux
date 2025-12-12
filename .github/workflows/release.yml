@@ -113,6 +113,7 @@ jobs:
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Create version bump branch and PR (if version changed)
+        id: bump_pr
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN == 'true' }}
         env:
           UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
@@ -133,6 +134,23 @@ jobs:
           git commit -m "chore: bump version to ${VERSION}"
           git push origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" --title "chore: bump version to ${VERSION}" --body "Automated version bump from release workflow." || echo "::warning::PR creation skipped (permissions or PR already exists)"
+          PR_NUMBER=$(gh pr view --head "$BRANCH" --json number --jq '.number' || true)
+          PR_URL=$(gh pr view --head "$BRANCH" --json url --jq '.url' || true)
+          if [ -n "$PR_NUMBER" ]; then
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Auto-approve and merge version bump PR
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN == 'true' && steps.bump_pr.outputs.pr_number != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+        run: |
+          PR="${{ steps.bump_pr.outputs.pr_number }}"
+          echo "Approving PR #${PR}"
+          gh pr review "$PR" --approve || echo "::warning::Approval skipped (permissions or already approved)"
+          echo "Merging PR #${PR}"
+          gh pr merge "$PR" --merge --delete-branch || echo "::warning::Merge skipped (permissions or already merged)"
 
       - name: Warn if publish requested but no UPDATE_TOKEN
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN != 'true' }}
