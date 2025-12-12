@@ -990,6 +990,49 @@ async function main() {
   );
 
   server.registerTool(
+    'tmux.readonly_state',
+    {
+      title: 'Snapshot tmux state (readonly)',
+      description: 'Readonly variant of tmux.state to retrieve sessions, windows, panes, and recent capture without modifying defaults.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        session: z
+          .string()
+          .describe('Session name (optional). Uses default session if set; required if none set.')
+          .optional(),
+        captureLines: z
+          .number()
+          .describe('How many lines of scrollback to include from the capture target (default 200).')
+          .optional(),
+      },
+    },
+    async ({ host, session, captureLines }) => {
+      const snapshot = await buildStateSnapshot({
+        host,
+        session,
+        captureLines: captureLines ?? 200,
+      });
+      const text = [
+        `Host: ${snapshot.host}`,
+        `Session: ${snapshot.session}`,
+        `Capture target: ${snapshot.captureTarget ?? '(none)'}`,
+        '',
+        snapshot.sessionsText,
+        '',
+        snapshot.windowsText,
+        '',
+        snapshot.panesText,
+        '',
+        `Capture (last ${captureLines ?? 200} lines):`,
+        snapshot.capture,
+        '',
+        defaultTargetNote(),
+      ].join('\n');
+      return { content: [{ type: 'text', text }] };
+    },
+  );
+
+  server.registerTool(
     'tmux.context_history',
     {
       title: 'Capture recent tmux history',
@@ -1602,6 +1645,55 @@ async function main() {
   );
 
   server.registerTool(
+    'tmux.batch_capture',
+    {
+      title: 'Capture multiple panes (batch)',
+      description: 'Capture scrollback from multiple panes in parallel (readonly).',
+      inputSchema: {
+        targets: z
+          .array(
+            z.object({
+              target: z.string().describe('Pane target (pane id or session:window.pane).'),
+              host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+              lines: z.number().describe('Lines to capture for this target (default 200).').optional(),
+            }),
+          )
+          .nonempty(),
+        defaultLines: z.number().describe('Default lines to capture for targets without lines.').optional(),
+      },
+    },
+    async ({ targets, defaultLines = 200 }) => {
+      const results = await Promise.allSettled(
+        targets.map(async (t) => {
+          const resolvedHost = resolveHost(t.host);
+          const output = await capturePane(t.target, -(t.lines ?? defaultLines), undefined, resolvedHost);
+          return { target: t.target, host: resolvedHost ?? 'local', output };
+        }),
+      );
+
+      const lines: string[] = [];
+      let ok = 0;
+      let fail = 0;
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          ok++;
+          lines.push(`== ${r.value.host} ${r.value.target} ==`);
+          lines.push(r.value.output || '(empty)');
+        } else {
+          fail++;
+          const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+          lines.push('== error ==');
+          lines.push(msg);
+        }
+      }
+      lines.push('');
+      lines.push(`Summary: ${ok} succeeded, ${fail} failed`);
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
+    },
+  );
+
+  server.registerTool(
     'tmux.send_keys',
     {
       title: 'Send keys to pane',
@@ -1634,6 +1726,54 @@ async function main() {
       return {
         content: [{ type: 'text', text: `Sent keys to ${resolvedTarget}${enter ? ' (with Enter)' : ''}.` }],
       };
+    },
+  );
+
+  server.registerTool(
+    'tmux.run_batch',
+    {
+      title: 'Run a batch of commands in one call',
+      description:
+        'Execute multiple shell commands sequentially in one tmux pane and capture the output. Uses "&&" by default (fail fast) or ";" when failFast=false.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z
+          .string()
+          .describe('Pane target (pane id or session:window.pane). If omitted, uses default pane if set.')
+          .optional(),
+        commands: z
+          .array(z.string())
+          .nonempty()
+          .describe('List of commands to run sequentially in the same pane.'),
+        failFast: z
+          .boolean()
+          .describe('Use && between commands (default true). Set false to use ";" so later commands run even if earlier fail.')
+          .optional(),
+        captureLines: z
+          .number()
+          .describe('Lines to capture after execution (default 200).')
+          .optional(),
+      },
+    },
+    async ({ host, target, commands, failFast = true, captureLines = 200 }) => {
+      const resolvedHost = resolveHost(host);
+      const resolvedTarget = requirePaneTarget(target);
+      const separator = failFast ? '&&' : ';';
+      const joined = commands.join(` ${separator} `);
+
+      // Send once, capture once (faster than multiple calls)
+      await sendKeys(resolvedTarget, joined, true, resolvedHost);
+      await new Promise((r) => setTimeout(r, 300)); // allow output to flush
+      const output = await capturePane(resolvedTarget, -captureLines, undefined, resolvedHost);
+
+      const text = [
+        `Commands: ${commands.join(' | ')}`,
+        `Target: ${resolvedTarget}${resolvedHost ? ` on ${resolvedHost}` : ''}`,
+        '',
+        output || '(no output)',
+      ].join('\n');
+
+      return { content: [{ type: 'text', text }] };
     },
   );
 

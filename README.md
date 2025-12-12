@@ -23,6 +23,7 @@
 - [Exposed tools](#exposed-tools)
 - [Collaborative workflow](#collaborative-workflow)
 - [How-to (verbose examples)](#how-to-verbose-examples)
+- [ChatGPT / Supergateway](#chatgpt--supergateway)
 - [Configuration](#configuration)
 - [Safety notes](#safety-notes)
 - [Tips for LLM prompts](#tips-for-llm-prompts)
@@ -117,6 +118,9 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.select_window` / `tmux.select_pane`: Change focus targets explicitly.
 - `tmux.set_sync_panes`: Toggle synchronize-panes for a window.
 - `tmux.save_layout_profile` / `tmux.apply_layout_profile`: Persist and re-apply layout profiles by name.
+- `tmux.readonly_state`: Snapshot sessions/windows/panes/capture without touching defaults.
+- `tmux.batch_capture`: Capture multiple panes in parallel for faster context gathering.
+- `tmux.run_batch`: Run multiple commands in one call in the same pane (uses `&&` by default, or `;` when `failFast=false`).
 - `tmux.health`: Quick health check (tmux reachable, session listing, host profile info).
 - `tmux.context_history`: Pull recent scrollback (pane or session) and extract recent commands.
 - `tmux.quickstart`: Return a concise playbook/do-don’t block for the LLM.
@@ -225,6 +229,34 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
   {"name":"tmux.set_default","arguments":{"host":"my-ssh-alias","session":"collab","window":"collab:0","pane":"collab:0.0"}}
   {"name":"tmux.get_default","arguments":{}}
   ```
+
+## ChatGPT / Supergateway
+Use Supergateway and (optionally) ngrok to expose the MCP stdio server to ChatGPT (Atlas tools):
+1) Install globally:
+```bash
+npm i -g @k8ika0s/mcp-tmux
+```
+2) Run Supergateway locally:
+```bash
+supergateway serve --listen 0.0.0.0:3001 --command "mcp-tmux" --env "MCP_TMUX_HOST=my-ssh-alias" --env "MCP_TMUX_SESSION=collab"
+```
+3) Expose with ngrok (optional):
+```bash
+ngrok http 3001
+```
+Copy the https tunnel URL.
+4) In ChatGPT (Atlas) tools, add a Custom MCP server pointing to your Supergateway URL (ngrok tunnel or local if supported). Example config snippet:
+```json
+{
+  "servers": {
+    "tmux": {
+      "url": "https://your-ngrok-subdomain.ngrok.io",
+      "capabilities": ["tools", "resources"]
+    }
+  }
+}
+```
+Use readonly tools (`tmux.readonly_state`, `tmux.batch_capture`, `tmux.list_*`, `tmux.capture_pane`) for information gathering; use confirm flags for destructive actions.
 
 ## Configuration
 - `MCP_TMUX_SESSION`: Prefer this session when no explicit target is provided.
