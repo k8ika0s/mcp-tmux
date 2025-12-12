@@ -118,6 +118,7 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.save_layout_profile` / `tmux.apply_layout_profile`: Persist and re-apply layout profiles by name.
 - `tmux.readonly_state`: Snapshot sessions/windows/panes/capture without touching defaults.
 - `tmux.batch_capture`: Capture multiple panes in parallel for faster context gathering.
+- `tmux.run_batch`: Run multiple commands in one call in the same pane (uses `&&` by default, or `;` when `failFast=false`).
 - `tmux.health`: Quick health check (tmux reachable, session listing, host profile info).
 - `tmux.context_history`: Pull recent scrollback (pane or session) and extract recent commands.
 - `tmux.quickstart`: Return a concise playbook/do-don’t block for the LLM.

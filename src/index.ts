@@ -1730,6 +1730,72 @@ async function main() {
   );
 
   server.registerTool(
+    'tmux.run_batch',
+    {
+      title: 'Run a batch of commands in one call',
+      description:
+        'Execute multiple shell commands sequentially in one tmux pane and capture the output. Uses "&&" by default (fail fast) or ";" when failFast=false.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        target: z
+          .string()
+          .describe('Pane target (pane id or session:window.pane). If omitted, uses default pane if set.')
+          .optional(),
+        commands: z
+          .array(z.string())
+          .nonempty()
+          .describe('List of commands to run sequentially in the same pane.'),
+        failFast: z
+          .boolean()
+          .describe('Use && between commands (default true). Set false to use ";" so later commands run even if earlier fail.')
+          .optional(),
+        captureLines: z
+          .number()
+          .describe('Lines to capture after execution (default 200).')
+          .optional(),
+      },
+    },
+    async ({ host, target, commands, failFast = true, captureLines = 200 }) => {
+      const resolvedHost = resolveHost(host);
+      const resolvedTarget = requirePaneTarget(target);
+      const separator = failFast ? '&&' : ';';
+      const joined = commands.join(` ${separator} `);
+
+      // Run as a single executeCommand to reuse marker tracking
+      const commandId = await tmux.executeCommand(resolvedTarget, joined, false, false);
+      const resourceUri = `tmux://command/${commandId}/result`;
+
+      // Try a short poll to return inline output when quick; otherwise point to resource
+      let finalText: string | null = null;
+      for (let i = 0; i < 5; i++) {
+        const state = await tmux.checkCommandStatus(commandId);
+        if (state && state.status !== 'pending') {
+          finalText = `Status: ${state.status}\nExit code: ${state.exitCode}\nCommand: ${state.command}\n\n--- Output ---\n${state.result}`;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      if (finalText) {
+        return { content: [{ type: 'text', text: finalText }] };
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: [
+              `Batch started (commands joined with "${separator}") in ${resolvedTarget}.`,
+              `To retrieve results, subscribe/read: ${resourceUri}`,
+              `Status will update when complete.`,
+            ].join('\n'),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
     'tmux.new_session',
     {
       title: 'Create a new session',
