@@ -6,12 +6,12 @@
     "url": "https://github.com/k8ika0s/mcp-tmux",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@k8ika0s/mcp-tmux",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "transport": {
         "type": "stdio",
         "command": "npx",
