@@ -12,17 +12,21 @@ import { InMemoryTaskStore, InMemoryTaskMessageQueue } from '@modelcontextprotoc
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const PKG_META: { version: string; name: string } = (() => {
+const PKG_META: { version: string; name: string; repoUrl?: string } = (() => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pkg = require('../package.json');
-    return { version: pkg.version as string, name: pkg.name as string };
+    const repoUrl =
+      (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url) ||
+      (typeof pkg.homepage === 'string' ? pkg.homepage : undefined);
+    return { version: pkg.version as string, name: pkg.name as string, repoUrl };
   } catch {
-    return { version: process.env.npm_package_version ?? 'unknown', name: 'mcp-tmux' };
+    return { version: process.env.npm_package_version ?? 'unknown', name: 'mcp-tmux', repoUrl: undefined };
   }
 })();
 const VERSION = PKG_META.version;
 const PACKAGE_NAME = PKG_META.name;
+const REPO_URL = PKG_META.repoUrl || 'https://github.com/k8ika0s/mcp-tmux';
 
 type TmuxSession = {
   id: string;
@@ -63,6 +67,8 @@ const hostProfilePath =
 const logBaseDir =
   process.env.MCP_TMUX_LOG_DIR || path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'logs');
 const layoutProfilePath = path.join(process.env.HOME || process.cwd(), '.config', 'mcp-tmux', 'layouts.json');
+const defaultCapturePageSizes = [20, 100, 400]; // incremental paging budget
+const defaultMaxPages = 3;
 let hostProfiles: Record<
   string,
   {
@@ -99,7 +105,7 @@ You are connected to a tmux MCP server. Use these tools to collaborate with a hu
 - After sending keys, always capture-pane to read output; re-list panes/windows to stay in sync.
 - Helpers: tmux.tail_pane (poll output), tmux.capture_layout/tmux.restore_layout (save/apply layouts), host profiles via MCP_TMUX_HOSTS_FILE for per-host PATH/tmux bin defaults.
 - Fanout: tmux.multi_run to send the same command to multiple hosts/panes and aggregate results.
-- Batching: tmux.run_batch runs multiple commands in one call; tmux.batch_capture gathers multiple panes in one call (readonly).
+- Batching: tmux.run_batch runs multiple commands in one call; tmux.batch_capture gathers multiple panes in one call (readonly). run_batch can clean the prompt (C-c/C-u for bash/zsh) before writes and auto-captures output with paging.
 - Keys: tmux.send_keys accepts <SPACE>/<ENTER>/<TAB>/<ESC> tokens; empty keys with enter=true will send Enter.
 `.trim();
 
@@ -140,6 +146,37 @@ async function runTmux(args: string[], host?: string) {
       `${host ? `ssh ${host} ` : ''}tmux ${args.join(' ')} failed: ${detail}`.trim(),
     );
   }
+}
+
+async function capturePaged(target: string, host: string | undefined, pageSizes = defaultCapturePageSizes) {
+  // Try progressively larger captures until we either cover history or exhaust sizes.
+  const historySizeRaw = await runTmux(['display-message', '-p', '#{history_size}'], host).catch(() => '0');
+  const historySize = Number(historySizeRaw) || 0;
+  let captured = '';
+  let usedLines = 0;
+  let usedPage = 0;
+  let moreAvailable = false;
+
+  for (let i = 0; i < pageSizes.length; i++) {
+    const lines = pageSizes[i];
+    const output = await capturePane(target, -lines, undefined, host);
+    usedLines = lines;
+    usedPage = i + 1;
+    captured = output;
+    if (output.split('\n').length >= Math.min(lines, historySize) || lines >= historySize) {
+      moreAvailable = false;
+      break;
+    }
+    moreAvailable = true;
+  }
+
+  return {
+    captured,
+    requested: usedLines,
+    historySize,
+    pagesTried: usedPage,
+    moreAvailable: moreAvailable || (historySize > usedLines),
+  };
 }
 
 function resolveHost(host?: string) {
@@ -1160,7 +1197,7 @@ async function main() {
       description: 'Return the running server version and package identifier for verification.',
     },
     async () => {
-      const text = [`Package: ${PACKAGE_NAME}`, `Version: ${VERSION}`, `Log dir: ${logBaseDir}`].join('\n');
+      const text = [`Package: ${PACKAGE_NAME}`, `Version: ${VERSION}`, `Repository: ${REPO_URL}`, `Log dir: ${logBaseDir}`].join('\n');
       return { content: [{ type: 'text', text }] };
     },
   );
@@ -1802,17 +1839,22 @@ async function main() {
     {
       title: 'Run a batch of commands in one call',
       description:
-        'Execute multiple shell commands sequentially in one tmux pane and capture the output. Uses "&&" by default (fail fast) or ";" when failFast=false.',
+        'Execute multiple shell commands sequentially in one tmux pane and capture the output. Uses "&&" by default (fail fast) or ";" when failFast=false. Automatically captures output (paged) and can clean the prompt before writing.',
       inputSchema: {
         host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
         target: z
           .string()
           .describe('Pane target (pane id or session:window.pane). If omitted, uses default pane if set.')
           .optional(),
-        commands: z
-          .array(z.string())
+        steps: z
+          .array(
+            z.object({
+              command: z.string().describe('Command text to send.'),
+              enter: z.boolean().describe('Whether to press Enter after sending this command.').default(true).optional(),
+            }),
+          )
           .nonempty()
-          .describe('List of commands to run sequentially in the same pane.'),
+          .describe('List of commands to run sequentially in the same pane, with optional per-step Enter.'),
         failFast: z
           .boolean()
           .describe('Use && between commands (default true). Set false to use ";" so later commands run even if earlier fail.')
@@ -1821,27 +1863,56 @@ async function main() {
           .number()
           .describe('Lines to capture after execution (default 200).')
           .optional(),
+        cleanPrompt: z
+          .boolean()
+          .describe('Send Ctrl+C then Ctrl+U before first write to clear any stray input (bash/zsh friendly). Default true.')
+          .default(true)
+          .optional(),
       },
     },
-    async ({ host, target, commands, failFast = true, captureLines = 200 }) => {
+    async ({ host, target, steps, failFast = true, captureLines = 200, cleanPrompt = true }) => {
       const resolvedHost = resolveHost(host);
       const resolvedTarget = requirePaneTarget(target);
       const separator = failFast ? '&&' : ';';
-      const joined = commands.join(` ${separator} `);
+      const hasMultiple = steps.length > 1;
 
-      // Send once, capture once (faster than multiple calls)
-      await sendKeys(resolvedTarget, joined, true, resolvedHost);
-      await new Promise((r) => setTimeout(r, 300)); // allow output to flush
-      const output = await capturePane(resolvedTarget, -captureLines, undefined, resolvedHost);
+      // Clean prompt if requested (bash/zsh friendly: Ctrl+C then Ctrl+U)
+      if (cleanPrompt) {
+        await sendKeys(resolvedTarget, '', false, resolvedHost);
+        await sendKeys(resolvedTarget, '\u0003', false, resolvedHost); // Ctrl+C
+        await sendKeys(resolvedTarget, '\u0015', false, resolvedHost); // Ctrl+U (line clear)
+      }
+
+      if (failFast && hasMultiple) {
+        const joined = steps.map((s) => s.command).join(` ${separator} `);
+        await sendKeys(resolvedTarget, joined, true, resolvedHost);
+      } else {
+        for (const step of steps) {
+          await sendKeys(resolvedTarget, step.command, step.enter ?? true, resolvedHost);
+        }
+      }
+
+      // allow output to flush
+      await new Promise((r) => setTimeout(r, 300));
+      const capture = await capturePaged(resolvedTarget, resolvedHost, [20, 100, Math.max(captureLines, 400)]);
 
       const text = [
-        `Commands: ${commands.join(' | ')}`,
+        `Commands: ${steps.map((s) => s.command).join(' | ')}`,
         `Target: ${resolvedTarget}${resolvedHost ? ` on ${resolvedHost}` : ''}`,
+        cleanPrompt ? 'Prompt cleanup: yes (C-c/C-u)' : 'Prompt cleanup: no',
+        `Capture: last ${capture.requested} of ${capture.historySize || '?'} lines${capture.moreAvailable ? ' (truncated, request more)' : ''}`,
         '',
-        output || '(no output)',
+        capture.captured || '(no output)',
       ].join('\n');
 
-      return { content: [{ type: 'text', text }] };
+      return {
+        content: [
+          {
+            type: 'text',
+            text,
+          },
+        ],
+      };
     },
   );
 

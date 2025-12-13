@@ -123,7 +123,7 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux.save_layout_profile` / `tmux.apply_layout_profile`: Persist and re-apply layout profiles by name.
 - `tmux.readonly_state`: Snapshot sessions/windows/panes/capture without touching defaults.
 - `tmux.batch_capture`: Capture multiple panes in parallel for faster context gathering.
-- `tmux.run_batch`: Run multiple commands in one call in the same pane (uses `&&` by default, or `;` when `failFast=false`).
+- `tmux.run_batch`: Run multiple commands in one call in the same pane (uses `&&` by default, or `;` when `failFast=false`), auto-clean the prompt (bash/zsh: Ctrl+C then Ctrl+U) before writes by default (`cleanPrompt=true`), and auto-captures output with paging (starts ~20 lines, grows if needed).
 - `tmux.send_keys`: Send keys (supports `<SPACE>`, `<ENTER>`, `<TAB>`, `<ESC>` tokens; empty + `enter=true` sends Enter).
 - `tmux.health`: Quick health check (tmux reachable, session listing, host profile info).
 - `tmux.context_history`: Pull recent scrollback (pane or session) and extract recent commands.
@@ -165,9 +165,14 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
   ```
 - Drive a shell and read results:
   ```json
-  {"name":"tmux.send_keys","arguments":{"target":"collab:0.0","keys":"ls -lah","enter":true}}
-  {"name":"tmux.capture_pane","arguments":{"target":"collab:0.0","start":-200}}
+  {"name":"tmux.run_batch","arguments":{
+    "target":"collab:0.0",
+    "steps":[{"command":"ls -lah"}],
+    "cleanPrompt":true,
+    "failFast":true
+  }}
   ```
+  - Behavior: sends Ctrl+C then Ctrl+U to clear the line (bash/zsh) before writing, runs the commands (Enter per step), then auto-captures output with paging (starts ~20 lines, grows if needed).
 - Tail a pane to watch output:
   ```json
   {"name":"tmux.tail_pane","arguments":{"target":"collab:0.0","lines":200,"iterations":3,"intervalMs":1000}}
@@ -196,6 +201,21 @@ Targets accept standard tmux notation: `session`, `session:window`, `session:win
   ```json
   {"name":"tmux.context_history","arguments":{"session":"collab","lines":800,"allPanes":true}}
   ```
+- Run multiple commands with per-step Enter and prompt cleanup:
+  ```json
+  {"name":"tmux.run_batch","arguments":{
+    "target":"collab:0.0",
+    "steps":[
+      {"command":"git status"},
+      {"command":"npm test","enter":true}
+    ],
+    "cleanPrompt":true,
+    "failFast":true
+  }}
+  ```
+  - `cleanPrompt` (default true) sends Ctrl+C then Ctrl+U (bash/zsh) before the first write to clear stray input.
+  - `failFast=true` joins commands with `&&` (single Enter); set `failFast=false` to send each step separately (Enter per step).
+  - Output capture is automatic with paging: starts around 20 lines, then expands (e.g., 100/400) if needed and returns a truncation hint.
 - Quickstart playbook for the LLM:
   ```json
   {"name":"tmux.quickstart","arguments":{}}
@@ -294,7 +314,7 @@ Use readonly tools (`tmux.readonly_state`, `tmux.batch_capture`, `tmux.list_*`, 
 - Maintain defaults with `tmux.set_default` and re-ground with `tmux.state`.
 - Confirm before destructive actions; prefer helper tools over raw `tmux.command`.
 - After any change, re-list windows/panes or capture to stay in sync (server is pull-only).
-- Verify what’s running with `tmux.server_info` (reports package name, version, and log directory).
+- Verify what’s running with `tmux.server_info` (reports package name, version, repository link, and log directory).
 
 ## CI, security, and governance
 - CI: GitHub Actions (`CI` workflow) runs `npm run build`.
