@@ -139,9 +139,8 @@ async function runTmux(args: string[], host?: string) {
     let stdout: string;
 
     if (host) {
-      // Protect format strings (#{...}) by quoting tmux args and executing via sh -c on the remote side.
-      const tmuxArgs = [bin, ...args].map(shQuote).join(' ');
-      const tmuxCmd = `PATH=${basePath} ${tmuxArgs}`;
+      // Quote everything and run via sh -c so format strings (#{...}) survive the remote shell.
+      const tmuxCmd = ['env', `PATH=${basePath}`, bin, ...args].map(shQuote).join(' ');
       const sshArgs = ['-T', host, 'sh', '-c', tmuxCmd];
       ({ stdout } = await execa('ssh', sshArgs, { timeout: tmuxCommandTimeoutMs }));
     } else {
