@@ -314,7 +314,7 @@ Use readonly tools (`tmux.readonly_state`, `tmux.batch_capture`, `tmux.list_*`, 
 - Maintain defaults with `tmux.set_default` and re-ground with `tmux.state`.
 - Confirm before destructive actions; prefer helper tools over raw `tmux.command`.
 - After any change, re-list windows/panes or capture to stay in sync (server is pull-only).
-- Verify what’s running with `tmux.server_info` (reports package name, version, and log directory).
+- Verify what’s running with `tmux.server_info` (reports package name, version, repository link, and log directory).
 
 ## CI, security, and governance
 - CI: GitHub Actions (`CI` workflow) runs `npm run build`.

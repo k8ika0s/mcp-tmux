@@ -12,17 +12,21 @@ import { InMemoryTaskStore, InMemoryTaskMessageQueue } from '@modelcontextprotoc
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const PKG_META: { version: string; name: string } = (() => {
+const PKG_META: { version: string; name: string; repoUrl?: string } = (() => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pkg = require('../package.json');
-    return { version: pkg.version as string, name: pkg.name as string };
+    const repoUrl =
+      (typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url) ||
+      (typeof pkg.homepage === 'string' ? pkg.homepage : undefined);
+    return { version: pkg.version as string, name: pkg.name as string, repoUrl };
   } catch {
-    return { version: process.env.npm_package_version ?? 'unknown', name: 'mcp-tmux' };
+    return { version: process.env.npm_package_version ?? 'unknown', name: 'mcp-tmux', repoUrl: undefined };
   }
 })();
 const VERSION = PKG_META.version;
 const PACKAGE_NAME = PKG_META.name;
+const REPO_URL = PKG_META.repoUrl || 'https://github.com/k8ika0s/mcp-tmux';
 
 type TmuxSession = {
   id: string;
@@ -1193,7 +1197,7 @@ async function main() {
       description: 'Return the running server version and package identifier for verification.',
     },
     async () => {
-      const text = [`Package: ${PACKAGE_NAME}`, `Version: ${VERSION}`, `Log dir: ${logBaseDir}`].join('\n');
+      const text = [`Package: ${PACKAGE_NAME}`, `Version: ${VERSION}`, `Repository: ${REPO_URL}`, `Log dir: ${logBaseDir}`].join('\n');
       return { content: [{ type: 'text', text }] };
     },
   );
