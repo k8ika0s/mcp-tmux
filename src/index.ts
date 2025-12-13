@@ -98,15 +98,15 @@ const isoTimestamp = () => new Date().toISOString();
 const instructions = `
 You are connected to a tmux MCP server. Use these tools to collaborate with a human inside tmux.
 
-- Playbook: (1) tmux.open_session (host+session), (2) tmux.default_context, (3) tmux.list_windows/panes, (4) tmux.send_keys or tmux.run_batch, then tmux.capture_pane, (5) repeat.
-- Targets: session, session:window, session:window.pane, or IDs. Use tmux.set_default to pin host/session/window/pane.
+- Playbook: (1) tmux_open_session (host+session), (2) tmux_default_context, (3) tmux_list_windows/panes, (4) tmux_send_keys or tmux_run_batch, then tmux_capture_pane, (5) repeat.
+- Targets: session, session:window, session:window.pane, or IDs. Use tmux_set_default to pin host/session/window/pane.
 - Remote: provide host (ssh alias) + session or set MCP_TMUX_HOST/MCP_TMUX_SESSION. Server runs tmux via ssh -T <host> tmux ....
-- Safety: destructive tools require confirm=true; prefer tmux.command only when helpers don’t cover it.
-- After sending keys, always capture-pane to read output; re-list panes/windows to stay in sync.
-- Helpers: tmux.tail_pane (poll output), tmux.capture_layout/tmux.restore_layout (save/apply layouts), host profiles via MCP_TMUX_HOSTS_FILE for per-host PATH/tmux bin defaults.
-- Fanout: tmux.multi_run to send the same command to multiple hosts/panes and aggregate results.
-- Batching: tmux.run_batch runs multiple commands in one call; tmux.batch_capture gathers multiple panes in one call (readonly). run_batch can clean the prompt (C-c/C-u for bash/zsh) before writes and auto-captures output with paging.
-- Keys: tmux.send_keys accepts <SPACE>/<ENTER>/<TAB>/<ESC> tokens; empty keys with enter=true will send Enter.
+- Safety: destructive tools require confirm=true; prefer tmux_command only when helpers don’t cover it.
+- After sending keys, always use tmux_capture_pane to read output; re-list panes/windows to stay in sync.
+- Helpers: tmux_tail_pane (poll output), tmux_capture_layout/tmux_restore_layout (save/apply layouts), host profiles via MCP_TMUX_HOSTS_FILE for per-host PATH/tmux bin defaults.
+- Fanout: tmux_multi_run to send the same command to multiple hosts/panes and aggregate results.
+- Batching: tmux_run_batch runs multiple commands in one call; tmux_batch_capture gathers multiple panes in one call (readonly). run_batch can clean the prompt (C-c/C-u for bash/zsh) before writes and auto-captures output with paging.
+- Keys: tmux_send_keys accepts <SPACE>/<ENTER>/<TAB>/<ESC> tokens; empty keys with enter=true will send Enter.
 `.trim();
 
 function assertValidHost(host?: string) {
@@ -196,7 +196,7 @@ function requirePaneTarget(target?: string) {
   if (!resolved) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      'target is required (provide target or set default pane via tmux.set_default or tmux.select_pane)',
+      'target is required (provide target or set default pane via tmux_set_default or tmux_select_pane)',
     );
   }
   return resolved;
@@ -224,7 +224,7 @@ function requireSession(session?: string) {
   if (!resolved) {
     throw new McpError(
       ErrorCode.InvalidParams,
-      'session is required (set session param, MCP_TMUX_SESSION, or use tmux.open_session)',
+      'session is required (set session param, MCP_TMUX_SESSION, or use tmux_open_session)',
     );
   }
   return resolved;
@@ -911,7 +911,7 @@ async function main() {
   );
 
   server.registerResource(
-    'tmux.state_resource',
+    'tmux_state_resource',
     'tmux://state/default',
     {
       title: 'Default tmux state snapshot',
@@ -953,7 +953,7 @@ async function main() {
   };
 
   server.registerTool(
-    'tmux.set_default',
+    'tmux_set_default',
     {
       title: 'Set default host/session/window/pane',
       description: 'Persist defaults for later tool calls. Omit fields you do not want to change.',
@@ -974,7 +974,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.get_default',
+    'tmux_get_default',
     {
       title: 'Show default host/session/window/pane',
       description: 'Display the current remembered defaults.',
@@ -983,7 +983,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.open_session',
+    'tmux_open_session',
     {
       title: 'Ensure/attach remote tmux session',
       description:
@@ -1014,7 +1014,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.default_context',
+    'tmux_default_context',
     {
       title: 'Show default tmux target context',
       description: 'Returns the default session (if any) and a quick layout snapshot.',
@@ -1038,7 +1038,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.state',
+    'tmux_state',
     {
       title: 'Snapshot tmux state',
       description: 'Return sessions, windows, panes, and the last lines of the active/default pane.',
@@ -1081,10 +1081,10 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.readonly_state',
+    'tmux_readonly_state',
     {
       title: 'Snapshot tmux state (readonly)',
-      description: 'Readonly variant of tmux.state to retrieve sessions, windows, panes, and recent capture without modifying defaults.',
+      description: 'Readonly variant of tmux_state to retrieve sessions, windows, panes, and recent capture without modifying defaults.',
       inputSchema: {
         host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
         session: z
@@ -1124,7 +1124,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.context_history',
+    'tmux_context_history',
     {
       title: 'Capture recent tmux history',
       description:
@@ -1164,7 +1164,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.quickstart',
+    'tmux_quickstart',
     {
       title: 'Quickstart instructions',
       description: 'Returns a concise how-to for using the tmux MCP tools safely.',
@@ -1172,16 +1172,16 @@ async function main() {
     async () => {
       const text = [
         'Playbook:',
-        '1) tmux.open_session (host+session)',
-        '2) tmux.default_context',
-        '3) tmux.list_windows / tmux.list_panes',
-        '4) tmux.select_window / tmux.select_pane (optional)',
-        '5) tmux.send_keys then tmux.capture_pane (or tmux.tail_pane / tmux.context_history)',
-        '6) Use tmux.capture_layout / tmux.save_layout_profile for layouts; tmux.set_sync_panes when needed.',
+        '1) tmux_open_session (host+session)',
+        '2) tmux_default_context',
+        '3) tmux_list_windows / tmux_list_panes',
+        '4) tmux_select_window / tmux_select_pane (optional)',
+        '5) tmux_send_keys then tmux_capture_pane (or tmux_tail_pane / tmux_context_history)',
+        '6) Use tmux_capture_layout / tmux_save_layout_profile for layouts; tmux_set_sync_panes when needed.',
         '',
         'Safety:',
         '- Destructive commands require confirm=true.',
-        '- Prefer helper tools over raw tmux.command.',
+        '- Prefer helper tools over raw tmux_command.',
         '- Always capture after sending keys; re-list panes/windows to stay in sync.',
         '',
         defaultTargetNote(),
@@ -1191,7 +1191,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.server_info',
+    'tmux_server_info',
     {
       title: 'Server info and version',
       description: 'Return the running server version and package identifier for verification.',
@@ -1203,7 +1203,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.set_audit_logging',
+    'tmux_set_audit_logging',
     {
       title: 'Set audit logging',
       description: 'Enable or disable verbose audit logging for a host/session (logs commands and outputs).',
@@ -1234,7 +1234,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.capture_layout',
+    'tmux_capture_layout',
     {
       title: 'Capture window layouts',
       description: 'Return window layouts for a session so they can be restored later.',
@@ -1254,14 +1254,14 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.restore_layout',
+    'tmux_restore_layout',
     {
       title: 'Restore a window layout',
       description: 'Apply a saved layout string to a target window.',
       inputSchema: {
         host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
         target: z.string().describe('Window target (e.g., session:window or window id).'),
-        layout: z.string().describe('Layout string obtained from tmux.capture_layout.'),
+        layout: z.string().describe('Layout string obtained from tmux_capture_layout.'),
       },
     },
     async ({ host, target, layout }) => {
@@ -1272,7 +1272,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.tail_pane',
+    'tmux_tail_pane',
     {
       title: 'Tail a pane buffer',
       description: 'Poll a pane multiple times to watch output without reissuing commands.',
@@ -1300,7 +1300,7 @@ async function main() {
   );
 
   server.experimental.tasks.registerToolTask(
-    'tmux.tail_task',
+    'tmux_tail_task',
     {
       title: 'Tail a pane (task)',
       description: 'Create a task to poll pane output over time. Client can poll for incremental results.',
@@ -1353,7 +1353,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.multi_run',
+    'tmux_multi_run',
     {
       title: 'Fan-out send and capture',
       description: 'Send the same keys to multiple targets (across hosts) and optionally capture results.',
@@ -1415,7 +1415,7 @@ async function main() {
   );
 
   server.experimental.tasks.registerToolTask(
-    'tmux.watch_dir_task',
+    'tmux_watch_dir_task',
     {
       title: 'Watch a directory for new files',
       description: 'Poll a directory (local or via SSH) and complete when new files appear or after max iterations.',
@@ -1470,7 +1470,7 @@ async function main() {
   );
 
   server.experimental.tasks.registerToolTask(
-    'tmux.wait_for_pattern_task',
+    'tmux_wait_for_pattern_task',
     {
       title: 'Wait for output pattern',
       description: 'Poll a pane for a regex pattern and complete when matched or after iterations.',
@@ -1533,7 +1533,7 @@ async function main() {
 
 
   server.registerTool(
-    'tmux.select_window',
+    'tmux_select_window',
     {
       title: 'Focus a window',
       description: 'Select a window so subsequent commands target it.',
@@ -1550,7 +1550,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.select_pane',
+    'tmux_select_pane',
     {
       title: 'Focus a pane',
       description: 'Select a pane so subsequent commands target it.',
@@ -1568,7 +1568,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.set_sync_panes',
+    'tmux_set_sync_panes',
     {
       title: 'Toggle synchronize-panes',
       description: 'Enable or disable synchronize-panes for a window.',
@@ -1586,7 +1586,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.save_layout_profile',
+    'tmux_save_layout_profile',
     {
       title: 'Save a layout profile',
       description: 'Capture layouts for all windows in a session and store them under a profile name.',
@@ -1604,7 +1604,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.apply_layout_profile',
+    'tmux_apply_layout_profile',
     {
       title: 'Apply a saved layout profile',
       description:
@@ -1626,7 +1626,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.health',
+    'tmux_health',
     {
       title: 'Health check',
       description: 'Check tmux availability, PATH/bin resolution, and session listing for a host.',
@@ -1659,7 +1659,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.list_sessions',
+    'tmux_list_sessions',
     {
       title: 'List tmux sessions',
       description: 'Enumerate sessions with attachment counts and window totals.',
@@ -1676,7 +1676,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.list_windows',
+    'tmux_list_windows',
     {
       title: 'List windows',
       description: 'List windows within a session (or all sessions if no target provided).',
@@ -1694,7 +1694,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.list_panes',
+    'tmux_list_panes',
     {
       title: 'List panes',
       description: 'List panes across windows or inside a specific target.',
@@ -1715,7 +1715,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.capture_pane',
+    'tmux_capture_pane',
     {
       title: 'Capture pane output',
       description: 'Read the scrollback of a pane to observe command results.',
@@ -1748,7 +1748,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.batch_capture',
+    'tmux_batch_capture',
     {
       title: 'Capture multiple panes (batch)',
       description: 'Capture scrollback from multiple panes in parallel (readonly).',
@@ -1797,7 +1797,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.send_keys',
+    'tmux_send_keys',
     {
       title: 'Send keys to pane',
       description: 'Send keystrokes to a tmux target, optionally appending Enter.',
@@ -1835,7 +1835,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.run_batch',
+    'tmux_run_batch',
     {
       title: 'Run a batch of commands in one call',
       description:
@@ -1917,7 +1917,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.new_session',
+    'tmux_new_session',
     {
       title: 'Create a new session',
       description: 'Create a detached tmux session to collaborate in.',
@@ -1942,7 +1942,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.new_window',
+    'tmux_new_window',
     {
       title: 'Create a new window',
       description: 'Create a window in a target session, useful for side-by-side collaboration.',
@@ -1968,7 +1968,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.split_pane',
+    'tmux_split_pane',
     {
       title: 'Split a pane',
       description: 'Split a pane horizontally or vertically, optionally running a command.',
@@ -1995,7 +1995,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.kill_session',
+    'tmux_kill_session',
     {
       title: 'Kill a session',
       description: 'Terminate a tmux session. Use with care.',
@@ -2020,7 +2020,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.kill_window',
+    'tmux_kill_window',
     {
       title: 'Kill a window',
       description: 'Close a tmux window. Use with care.',
@@ -2045,7 +2045,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.kill_pane',
+    'tmux_kill_pane',
     {
       title: 'Kill a pane',
       description: 'Close a tmux pane. Use with care.',
@@ -2070,7 +2070,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.rename_session',
+    'tmux_rename_session',
     {
       title: 'Rename a session',
       description: 'Rename a tmux session.',
@@ -2088,7 +2088,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.rename_window',
+    'tmux_rename_window',
     {
       title: 'Rename a window',
       description: 'Rename a tmux window.',
@@ -2106,7 +2106,7 @@ async function main() {
   );
 
   server.registerTool(
-    'tmux.command',
+    'tmux_command',
     {
       title: 'Run arbitrary tmux command',
       description:
@@ -2128,13 +2128,13 @@ async function main() {
       if (needsConfirm && !confirm) {
         throw new McpError(
           ErrorCode.InvalidParams,
-          'confirm=true is required for destructive tmux.command calls (kill*, unlink, attach -k)',
+          'confirm=true is required for destructive tmux_command calls (kill*, unlink, attach -k)',
         );
       }
       const resolvedHost = resolveHost(host);
       const output = await runTmux(args, resolvedHost);
       await log('info', `command: tmux ${args.join(' ')}`);
-      await auditLog(resolvedHost, defaultSession, 'tmux.command', {
+      await auditLog(resolvedHost, defaultSession, 'tmux_command', {
         args,
         outputLength: output.length,
       });
