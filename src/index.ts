@@ -124,6 +124,11 @@ function sanitizePathSegment(segment: string | undefined, fallback = 'unknown') 
   return cleaned || fallback;
 }
 
+function shQuote(arg: string) {
+  if (arg === '') return "''";
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
 async function runTmux(args: string[], host?: string) {
   try {
     assertValidHost(host);
@@ -131,12 +136,20 @@ async function runTmux(args: string[], host?: string) {
     const bin = hostConfig?.tmuxBin || tmuxBinary;
     const pathAdd = hostConfig?.pathAdd ?? [];
     const basePath = buildPath(process.env.PATH, [...tmuxFallbackPaths, ...pathAdd]);
-    const command = host ? 'ssh' : bin;
-    const commandArgs = host ? ['-T', host, 'env', `PATH=${basePath}`, bin, ...args] : args;
-    const { stdout } = await execa(command, commandArgs, {
-      env: host ? undefined : { ...process.env, PATH: basePath },
-      timeout: tmuxCommandTimeoutMs,
-    });
+    let stdout: string;
+
+    if (host) {
+      // Quote the entire tmux invocation so format strings (#{...}) are preserved by the remote shell.
+      const tmuxCmd = ['env', `PATH=${basePath}`, bin, ...args].map(shQuote).join(' ');
+      const sshArgs = ['-T', host, 'sh', '-c', tmuxCmd];
+      ({ stdout } = await execa('ssh', sshArgs, { timeout: tmuxCommandTimeoutMs }));
+    } else {
+      ({ stdout } = await execa(bin, args, {
+        env: { ...process.env, PATH: basePath },
+        timeout: tmuxCommandTimeoutMs,
+      }));
+    }
+
     return stdout.trim();
   } catch (error) {
     const err = error as { stderr?: string; stdout?: string; message: string };
