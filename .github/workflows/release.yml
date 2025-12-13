@@ -165,6 +165,10 @@ jobs:
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_MCPREGISTRY_TOKEN != 'true' }}
         run: echo "::warning::Publish requested but MCPREGISTRY_REGISTRY_TOKEN is not set; skipping MCP registry publish."
 
+      - name: Install mcp-publish CLI
+        if: ${{ github.event.inputs.publish == 'true' && env.HAS_MCPREGISTRY_TOKEN == 'true' }}
+        run: npm install --no-save mcp-publish@latest
+
       - name: Configure npm for npmjs
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_NPM_TOKEN == 'true' }}
         env:
@@ -238,4 +242,4 @@ jobs:
         env:
           MCPREGISTRY_REGISTRY_TOKEN: ${{ secrets.MCPREGISTRY_REGISTRY_TOKEN }}
           MCPREGISTRY_GITHUB_TOKEN: ${{ secrets.MCPREGISTRY_GITHUB_TOKEN != '' && secrets.MCPREGISTRY_GITHUB_TOKEN || secrets.UPDATE_TOKEN }}
-        run: npx --yes mcp-publish publish
+        run: npx mcp-publish publish
