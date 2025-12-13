@@ -150,8 +150,8 @@ jobs:
           PR="${{ steps.bump_pr.outputs.pr_number }}"
           echo "Approving PR #${PR}"
           gh pr review "$PR" --approve || echo "::warning::Approval skipped (permissions or already approved)"
-          echo "Merging PR #${PR}"
-          gh pr merge "$PR" --merge --delete-branch || echo "::warning::Merge skipped (permissions or already merged)"
+          echo "Enabling auto-merge for PR #${PR}"
+          gh pr merge "$PR" --auto --merge --delete-branch || echo "::warning::Auto-merge skipped or pending branch protection"
 
       - name: Warn if publish requested but no UPDATE_TOKEN
         if: ${{ github.event.inputs.publish == 'true' && env.HAS_UPDATE_TOKEN != 'true' }}
