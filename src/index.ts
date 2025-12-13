@@ -139,9 +139,11 @@ async function runTmux(args: string[], host?: string) {
     let stdout: string;
 
     if (host) {
-      // Build a single remote command string with quotes so format strings (#{...}) survive the remote shell.
-      const tmuxCmd = `PATH=${basePath} ${[bin, ...args].map(shQuote).join(' ')}`;
-      const sshArgs = ['-T', host, tmuxCmd];
+      // Build a single remote command string and base64-encode it to avoid shell comment parsing (#).
+      const commandStr = `PATH=${basePath} exec ${[bin, ...args].map(shQuote).join(' ')}`;
+      const b64 = Buffer.from(commandStr, 'utf8').toString('base64');
+      const remoteCmd = `printf %s ${shQuote(b64)} | base64 -d | sh`;
+      const sshArgs = ['-T', host, remoteCmd];
       ({ stdout } = await execa('ssh', sshArgs, { timeout: tmuxCommandTimeoutMs }));
     } else {
       ({ stdout } = await execa(bin, args, {
@@ -298,9 +300,11 @@ async function listWindows(target?: string, host?: string): Promise<TmuxWindow[]
   const raw = await runTmux(args, host);
   if (!raw) return [];
 
-  return raw.split('\n').map((line) => {
-    const [session, id, index, name, active, panes, flags] = line.split('\t');
-    return {
+  return raw
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((parts) => parts.length >= 7 && parts.every(Boolean))
+    .map(([session, id, index, name, active, panes, flags]) => ({
       session,
       id,
       index: Number(index),
@@ -308,8 +312,7 @@ async function listWindows(target?: string, host?: string): Promise<TmuxWindow[]
       active: active === '1',
       panes: Number(panes),
       flags,
-    };
-  });
+    }));
 }
 
 async function listPanes(target?: string, host?: string): Promise<TmuxPane[]> {
@@ -323,9 +326,11 @@ async function listPanes(target?: string, host?: string): Promise<TmuxPane[]> {
   const raw = await runTmux(args, host);
   if (!raw) return [];
 
-  return raw.split('\n').map((line) => {
-    const [session, window, id, index, active, tty, command, title] = line.split('\t');
-    return {
+  return raw
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((parts) => parts.length >= 8 && parts.every(Boolean))
+    .map(([session, window, id, index, active, tty, command, title]) => ({
       session,
       window,
       id,
@@ -334,8 +339,7 @@ async function listPanes(target?: string, host?: string): Promise<TmuxPane[]> {
       tty,
       command,
       title,
-    };
-  });
+    }));
 }
 
 async function capturePane(target: string, start?: number, end?: number, host?: string) {
@@ -2155,6 +2159,33 @@ async function main() {
       return {
         content: [{ type: 'text', text: output || '(no output)' }],
       };
+    },
+  );
+
+  server.registerTool(
+    'tmux_debug_raw',
+    {
+      title: 'Debug raw tmux output',
+      description: 'Run a tmux command and return raw stdout/stderr for debugging remote formatting/quoting issues.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        args: z
+          .array(z.string())
+          .nonempty()
+          .describe('Arguments to pass to tmux (do not include the tmux binary itself).'),
+      },
+    },
+    async ({ args, host }) => {
+      try {
+        const out = await runTmux(args, host);
+        return { content: [{ type: 'text', text: out || '(empty output)' }] };
+      } catch (error) {
+        const err = error as { message?: string; stderr?: string; stdout?: string };
+        const text = ['Error running tmux:', err.message || 'unknown', err.stderr || '', err.stdout || '']
+          .filter(Boolean)
+          .join('\n');
+        return { content: [{ type: 'text', text }] };
+      }
     },
   );
 
