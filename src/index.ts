@@ -1875,7 +1875,11 @@ async function main() {
           .describe('List of commands to run sequentially in the same pane, with optional per-step Enter.'),
         failFast: z
           .boolean()
-          .describe('Use && between commands (default true). Set false to use ";" so later commands run even if earlier fail.')
+          .describe('Use && between commands (default true). Set false to use ";" so later commands run even if earlier fail. Ignored if joinWith is set.')
+          .optional(),
+        joinWith: z
+          .enum(['&&', ';', 'newline'])
+          .describe('Explicit join token between steps. Use "newline" for heredocs/multi-line writes so terminators are isolated.')
           .optional(),
         captureLines: z
           .number()
@@ -1888,10 +1892,12 @@ async function main() {
           .optional(),
       },
     },
-    async ({ host, target, steps, failFast = true, captureLines = 200, cleanPrompt = true }) => {
+    async ({ host, target, steps, failFast = true, joinWith, captureLines = 200, cleanPrompt = true }) => {
       const resolvedHost = resolveHost(host);
       const resolvedTarget = requirePaneTarget(target);
-      const separator = failFast ? '&&' : ';';
+      const hasHeredoc = steps.some((s) => /<<\s*['"]?[\w-]+/.test(s.command));
+      const chosenJoin = joinWith || (hasHeredoc ? 'newline' : failFast ? '&&' : ';');
+      const separator = chosenJoin === 'newline' ? '\n' : ` ${chosenJoin} `;
       const hasMultiple = steps.length > 1;
 
       // Clean prompt if requested (bash/zsh friendly: Ctrl+C then Ctrl+U)
@@ -1901,13 +1907,13 @@ async function main() {
         await sendKeys(resolvedTarget, '\u0015', false, resolvedHost); // Ctrl+U (line clear)
       }
 
-      if (failFast && hasMultiple) {
+      if (chosenJoin !== 'newline' && failFast && hasMultiple) {
         const joined = steps.map((s) => s.command).join(` ${separator} `);
         await sendKeys(resolvedTarget, joined, true, resolvedHost);
       } else {
-        for (const step of steps) {
-          await sendKeys(resolvedTarget, step.command, step.enter ?? true, resolvedHost);
-        }
+        const joined = steps.map((s) => s.command).join(separator);
+        // If newline-joined, treat as one send to keep heredoc terminators on their own line.
+        await sendKeys(resolvedTarget, joined, true, resolvedHost);
       }
 
       // allow output to flush
