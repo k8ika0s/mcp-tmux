@@ -139,9 +139,9 @@ async function runTmux(args: string[], host?: string) {
     let stdout: string;
 
     if (host) {
-      // Escape tmux format strings so '#' is not treated as a comment by the remote shell.
-      const escapedArgs = args.map((a) => a.replace(/#\{/g, '\\#{'));
-      const sshArgs = ['-T', host, 'env', `PATH=${basePath}`, bin, ...escapedArgs];
+      // Quote everything and run via sh -c so format strings (#{...}) survive the remote shell.
+      const tmuxCmd = ['env', `PATH=${basePath}`, bin, ...args].map(shQuote).join(' ');
+      const sshArgs = ['-T', host, 'sh', '-c', tmuxCmd];
       ({ stdout } = await execa('ssh', sshArgs, { timeout: tmuxCommandTimeoutMs }));
     } else {
       ({ stdout } = await execa(bin, args, {
@@ -274,16 +274,17 @@ async function listSessions(host?: string): Promise<TmuxSession[]> {
   const raw = await runTmux(['list-sessions', '-F', fmt], host);
   if (!raw) return [];
 
-  return raw.split('\n').map((line) => {
-    const [id, name, windows, attached, created] = line.split('\t');
-    return {
+  return raw
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((parts) => parts.length >= 5 && parts[4] && !Number.isNaN(Number(parts[4])))
+    .map(([id, name, windows, attached, created]) => ({
       id,
       name,
       windows: Number(windows),
       attached: Number(attached),
       created: Number(created),
-    };
-  });
+    }));
 }
 
 async function listWindows(target?: string, host?: string): Promise<TmuxWindow[]> {
