@@ -41,5 +41,6 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 - Health + reflection: the gRPC server exposes standard health checks and (by default) reflection for easier local integration.
 - `ServerInfo`: returns package name/version/repo for verification from clients.
 - Auth: optional `--auth-token` enables bearer/x-mcp-token checks for all unary/stream RPCs.
+- Audit logging: colorful, structured logs for all calls (method, target, status, duration) are emitted server-side.
 
 Notes: StreamPane still uses `capture-pane` polling; swapping to `pipe-pane` tailing would provide near-real-time streaming. Auth/z-audit still to be added to mirror the Node MCP server.
