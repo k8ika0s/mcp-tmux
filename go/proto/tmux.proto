@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package mcp.tmux.v1;
+
+option go_package = "github.com/k8ika0s/mcp-tmux/go/proto;tmuxproto";
+
+message PaneRef {
+  string host = 1;   // ssh alias or empty for local
+  string session = 2;
+  string window = 3;
+  string pane = 4;   // tmux pane id (optional if default)
+}
+
+message StreamPaneRequest {
+  PaneRef target = 1;
+  uint64 from_seq = 2;
+  bool strip_ansi = 3;
+  uint32 max_chunk_bytes = 4;
+}
+
+message PaneChunk {
+  PaneRef target = 1;
+  uint64 seq = 2;
+  int64 ts_unix_millis = 3;
+  bytes data = 4;
+  bool is_truncated = 5;
+  bool heartbeat = 6;
+  bool eof = 7;
+  string reason = 8;
+}
+
+message SnapshotRequest {
+  PaneRef target = 1;
+  uint32 capture_lines = 2;
+}
+
+message Snapshot {
+  string sessions = 1;
+  string windows = 2;
+  string panes = 3;
+  string capture = 4;
+}
+
+message ListRequest { PaneRef target = 1; }
+message ListResponse { string text = 1; }
+
+message SetDefaultRequest { PaneRef target = 1; }
+message SetDefaultResponse { string text = 1; }
+
+service TmuxService {
+  rpc StreamPane(StreamPaneRequest) returns (stream PaneChunk);
+  rpc Snapshot(SnapshotRequest) returns (Snapshot);
+  rpc ListSessions(ListRequest) returns (ListResponse);
+  rpc ListWindows(ListRequest) returns (ListResponse);
+  rpc ListPanes(ListRequest) returns (ListResponse);
+  rpc SetDefault(SetDefaultRequest) returns (SetDefaultResponse);
+}
