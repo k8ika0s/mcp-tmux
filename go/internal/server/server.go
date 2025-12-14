@@ -395,6 +395,10 @@ func (s *Service) TailPane(req *tmuxproto.TailPaneRequest, stream tmuxproto.Tmux
 			interval = 50 * time.Millisecond
 		}
 	}
+	budgets := req.LineBudgets
+	if len(budgets) == 0 {
+		budgets = []uint32{20, 100, 400}
+	}
 	seq := uint64(0)
 	send := func(data []byte, heartbeat bool, eof bool, reason string) error {
 		seq++
@@ -410,15 +414,21 @@ func (s *Service) TailPane(req *tmuxproto.TailPaneRequest, stream tmuxproto.Tmux
 	}
 
 	ctx := stream.Context()
-	poll := time.NewTicker(1 * time.Second)
+	poll := time.NewTicker(interval)
 	defer poll.Stop()
 	last := ""
+	budgetIdx := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-poll.C:
-			args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", lines), "-N", fmt.Sprintf("%d", lines)}
+			currentLines := lines
+			if budgetIdx < len(budgets) {
+				currentLines = budgets[budgetIdx]
+				budgetIdx++
+			}
+			args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", currentLines), "-N", fmt.Sprintf("%d", currentLines)}
 			out, err := s.runTmux(ctx, target.Host, args)
 			if err != nil {
 				return status.Errorf(codes.Internal, "tail failed: %v", err)

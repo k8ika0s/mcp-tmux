@@ -33,6 +33,8 @@ const (
 	TmuxService_NewSession_FullMethodName    = "/mcp.tmux.v1.TmuxService/NewSession"
 	TmuxService_NewWindow_FullMethodName     = "/mcp.tmux.v1.TmuxService/NewWindow"
 	TmuxService_ServerInfo_FullMethodName    = "/mcp.tmux.v1.TmuxService/ServerInfo"
+	TmuxService_ListDefaults_FullMethodName  = "/mcp.tmux.v1.TmuxService/ListDefaults"
+	TmuxService_ValidateHost_FullMethodName  = "/mcp.tmux.v1.TmuxService/ValidateHost"
 	TmuxService_ListSessions_FullMethodName  = "/mcp.tmux.v1.TmuxService/ListSessions"
 	TmuxService_ListWindows_FullMethodName   = "/mcp.tmux.v1.TmuxService/ListWindows"
 	TmuxService_ListPanes_FullMethodName     = "/mcp.tmux.v1.TmuxService/ListPanes"
@@ -57,6 +59,8 @@ type TmuxServiceClient interface {
 	NewSession(ctx context.Context, in *NewSessionRequest, opts ...grpc.CallOption) (*NewSessionResponse, error)
 	NewWindow(ctx context.Context, in *NewWindowRequest, opts ...grpc.CallOption) (*NewWindowResponse, error)
 	ServerInfo(ctx context.Context, in *ServerInfoRequest, opts ...grpc.CallOption) (*ServerInfoResponse, error)
+	ListDefaults(ctx context.Context, in *ListDefaultsRequest, opts ...grpc.CallOption) (*ListDefaultsResponse, error)
+	ValidateHost(ctx context.Context, in *ValidateHostRequest, opts ...grpc.CallOption) (*ValidateHostResponse, error)
 	ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListWindows(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListPanes(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
@@ -229,6 +233,26 @@ func (c *tmuxServiceClient) ServerInfo(ctx context.Context, in *ServerInfoReques
 	return out, nil
 }
 
+func (c *tmuxServiceClient) ListDefaults(ctx context.Context, in *ListDefaultsRequest, opts ...grpc.CallOption) (*ListDefaultsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListDefaultsResponse)
+	err := c.cc.Invoke(ctx, TmuxService_ListDefaults_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tmuxServiceClient) ValidateHost(ctx context.Context, in *ValidateHostRequest, opts ...grpc.CallOption) (*ValidateHostResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateHostResponse)
+	err := c.cc.Invoke(ctx, TmuxService_ValidateHost_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tmuxServiceClient) ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListResponse)
@@ -287,6 +311,8 @@ type TmuxServiceServer interface {
 	NewSession(context.Context, *NewSessionRequest) (*NewSessionResponse, error)
 	NewWindow(context.Context, *NewWindowRequest) (*NewWindowResponse, error)
 	ServerInfo(context.Context, *ServerInfoRequest) (*ServerInfoResponse, error)
+	ListDefaults(context.Context, *ListDefaultsRequest) (*ListDefaultsResponse, error)
+	ValidateHost(context.Context, *ValidateHostRequest) (*ValidateHostResponse, error)
 	ListSessions(context.Context, *ListRequest) (*ListResponse, error)
 	ListWindows(context.Context, *ListRequest) (*ListResponse, error)
 	ListPanes(context.Context, *ListRequest) (*ListResponse, error)
@@ -342,6 +368,12 @@ func (UnimplementedTmuxServiceServer) NewWindow(context.Context, *NewWindowReque
 }
 func (UnimplementedTmuxServiceServer) ServerInfo(context.Context, *ServerInfoRequest) (*ServerInfoResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ServerInfo not implemented")
+}
+func (UnimplementedTmuxServiceServer) ListDefaults(context.Context, *ListDefaultsRequest) (*ListDefaultsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListDefaults not implemented")
+}
+func (UnimplementedTmuxServiceServer) ValidateHost(context.Context, *ValidateHostRequest) (*ValidateHostResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ValidateHost not implemented")
 }
 func (UnimplementedTmuxServiceServer) ListSessions(context.Context, *ListRequest) (*ListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSessions not implemented")
@@ -614,6 +646,42 @@ func _TmuxService_ServerInfo_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TmuxService_ListDefaults_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListDefaultsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).ListDefaults(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_ListDefaults_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).ListDefaults(ctx, req.(*ListDefaultsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TmuxService_ValidateHost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateHostRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).ValidateHost(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_ValidateHost_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).ValidateHost(ctx, req.(*ValidateHostRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TmuxService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListRequest)
 	if err := dec(in); err != nil {
@@ -740,6 +808,14 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ServerInfo",
 			Handler:    _TmuxService_ServerInfo_Handler,
+		},
+		{
+			MethodName: "ListDefaults",
+			Handler:    _TmuxService_ListDefaults_Handler,
+		},
+		{
+			MethodName: "ValidateHost",
+			Handler:    _TmuxService_ValidateHost_Handler,
 		},
 		{
 			MethodName: "ListSessions",

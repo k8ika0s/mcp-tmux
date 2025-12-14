@@ -150,6 +150,7 @@ message TailPaneRequest {
   bool strip_ansi = 3;
   uint32 max_bytes = 4;        // chunk size limit
   uint32 poll_millis = 5;      // optional poll override
+  repeated uint32 line_budgets = 6; // optional escalating budgets; falls back to defaults [20,100,400]
 }
 
 message TailChunk {
@@ -204,6 +205,21 @@ message ServerInfoResponse {
   string repo_url = 3;
 }
 
+message ListDefaultsRequest {}
+
+message ListDefaultsResponse {
+  PaneRef current_default = 1;
+  bool from_disk = 2;
+}
+
+message ValidateHostRequest { string host = 1; }
+message ValidateHostResponse {
+  bool found = 1;
+  PaneRef defaults = 2;
+  string tmux_bin = 3;
+  repeated string path_add = 4;
+}
+
 service TmuxService {
   rpc StreamPane(StreamPaneRequest) returns (stream PaneChunk);
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
@@ -219,6 +235,8 @@ service TmuxService {
   rpc NewSession(NewSessionRequest) returns (NewSessionResponse);
   rpc NewWindow(NewWindowRequest) returns (NewWindowResponse);
   rpc ServerInfo(ServerInfoRequest) returns (ServerInfoResponse);
+  rpc ListDefaults(ListDefaultsRequest) returns (ListDefaultsResponse);
+  rpc ValidateHost(ValidateHostRequest) returns (ValidateHostResponse);
   rpc ListSessions(ListRequest) returns (ListResponse);
   rpc ListWindows(ListRequest) returns (ListResponse);
   rpc ListPanes(ListRequest) returns (ListResponse);
