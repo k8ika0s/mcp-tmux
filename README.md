@@ -123,7 +123,7 @@ SSH quality-of-life: consider enabling ControlMaster/ControlPersist in your ssh 
 - `tmux_save_layout_profile` / `tmux_apply_layout_profile`: Persist and re-apply layout profiles by name.
 - `tmux_readonly_state`: Snapshot sessions/windows/panes/capture without touching defaults.
 - `tmux_batch_capture`: Capture multiple panes in parallel for faster context gathering.
-- `tmux_run_batch`: Run multiple commands in one call in the same pane (uses `&&` by default, or `;` when `failFast=false`), auto-clean the prompt (bash/zsh: Ctrl+C then Ctrl+U) before writes by default (`cleanPrompt=true`), and auto-captures output with paging (starts ~20 lines, grows if needed).
+- `tmux_run_batch`: Run multiple commands in one call in the same pane (uses `&&` by default, or `;`/`newline` via `joinWith` for heredocs), auto-clean the prompt (bash/zsh: Ctrl+C then Ctrl+U) before writes by default (`cleanPrompt=true`), and auto-captures output with paging (starts ~20 lines, grows if needed).
 - `tmux_send_keys`: Send keys (supports `<SPACE>`, `<ENTER>`, `<TAB>`, `<ESC>` tokens; empty + `enter=true` sends Enter).
 - `tmux_health`: Quick health check (tmux reachable, session listing, host profile info).
 - `tmux_context_history`: Pull recent scrollback (pane or session) and extract recent commands.

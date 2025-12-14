@@ -139,9 +139,11 @@ async function runTmux(args: string[], host?: string) {
     let stdout: string;
 
     if (host) {
-      // Avoid shell mangling entirely by passing argv directly to ssh.
-      // env PATH=... tmux ... will exec tmux (not print env).
-      const sshArgs = ['-T', host, 'env', `PATH=${basePath}`, bin, ...args];
+      // Build a single remote command string and base64-encode it to avoid shell comment parsing (#).
+      const commandStr = `PATH=${basePath} exec ${[bin, ...args].map(shQuote).join(' ')}`;
+      const b64 = Buffer.from(commandStr, 'utf8').toString('base64');
+      const remoteCmd = `printf %s ${shQuote(b64)} | base64 -d | sh`;
+      const sshArgs = ['-T', host, remoteCmd];
       ({ stdout } = await execa('ssh', sshArgs, { timeout: tmuxCommandTimeoutMs }));
     } else {
       ({ stdout } = await execa(bin, args, {
@@ -274,16 +276,17 @@ async function listSessions(host?: string): Promise<TmuxSession[]> {
   const raw = await runTmux(['list-sessions', '-F', fmt], host);
   if (!raw) return [];
 
-  return raw.split('\n').map((line) => {
-    const [id, name, windows, attached, created] = line.split('\t');
-    return {
+  return raw
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((parts) => parts.length >= 5 && parts.every(Boolean) && !Number.isNaN(Number(parts[4])))
+    .map(([id, name, windows, attached, created]) => ({
       id,
       name,
       windows: Number(windows),
       attached: Number(attached),
       created: Number(created),
-    };
-  });
+    }));
 }
 
 async function listWindows(target?: string, host?: string): Promise<TmuxWindow[]> {
@@ -297,9 +300,11 @@ async function listWindows(target?: string, host?: string): Promise<TmuxWindow[]
   const raw = await runTmux(args, host);
   if (!raw) return [];
 
-  return raw.split('\n').map((line) => {
-    const [session, id, index, name, active, panes, flags] = line.split('\t');
-    return {
+  return raw
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((parts) => parts.length >= 7 && parts.every(Boolean))
+    .map(([session, id, index, name, active, panes, flags]) => ({
       session,
       id,
       index: Number(index),
@@ -307,8 +312,7 @@ async function listWindows(target?: string, host?: string): Promise<TmuxWindow[]
       active: active === '1',
       panes: Number(panes),
       flags,
-    };
-  });
+    }));
 }
 
 async function listPanes(target?: string, host?: string): Promise<TmuxPane[]> {
@@ -322,9 +326,11 @@ async function listPanes(target?: string, host?: string): Promise<TmuxPane[]> {
   const raw = await runTmux(args, host);
   if (!raw) return [];
 
-  return raw.split('\n').map((line) => {
-    const [session, window, id, index, active, tty, command, title] = line.split('\t');
-    return {
+  return raw
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((parts) => parts.length >= 8 && parts.every(Boolean))
+    .map(([session, window, id, index, active, tty, command, title]) => ({
       session,
       window,
       id,
@@ -333,8 +339,7 @@ async function listPanes(target?: string, host?: string): Promise<TmuxPane[]> {
       tty,
       command,
       title,
-    };
-  });
+    }));
 }
 
 async function capturePane(target: string, start?: number, end?: number, host?: string) {
@@ -1870,7 +1875,11 @@ async function main() {
           .describe('List of commands to run sequentially in the same pane, with optional per-step Enter.'),
         failFast: z
           .boolean()
-          .describe('Use && between commands (default true). Set false to use ";" so later commands run even if earlier fail.')
+          .describe('Use && between commands (default true). Set false to use ";" so later commands run even if earlier fail. Ignored if joinWith is set.')
+          .optional(),
+        joinWith: z
+          .enum(['&&', ';', 'newline'])
+          .describe('Explicit join token between steps. Use "newline" for heredocs/multi-line writes so terminators are isolated.')
           .optional(),
         captureLines: z
           .number()
@@ -1883,10 +1892,12 @@ async function main() {
           .optional(),
       },
     },
-    async ({ host, target, steps, failFast = true, captureLines = 200, cleanPrompt = true }) => {
+    async ({ host, target, steps, failFast = true, joinWith, captureLines = 200, cleanPrompt = true }) => {
       const resolvedHost = resolveHost(host);
       const resolvedTarget = requirePaneTarget(target);
-      const separator = failFast ? '&&' : ';';
+      const hasHeredoc = steps.some((s) => /<<\s*['"]?[\w-]+/.test(s.command));
+      const chosenJoin = joinWith || (hasHeredoc ? 'newline' : failFast ? '&&' : ';');
+      const separator = chosenJoin === 'newline' ? '\n' : ` ${chosenJoin} `;
       const hasMultiple = steps.length > 1;
 
       // Clean prompt if requested (bash/zsh friendly: Ctrl+C then Ctrl+U)
@@ -1896,13 +1907,13 @@ async function main() {
         await sendKeys(resolvedTarget, '\u0015', false, resolvedHost); // Ctrl+U (line clear)
       }
 
-      if (failFast && hasMultiple) {
+      if (chosenJoin !== 'newline' && failFast && hasMultiple) {
         const joined = steps.map((s) => s.command).join(` ${separator} `);
         await sendKeys(resolvedTarget, joined, true, resolvedHost);
       } else {
-        for (const step of steps) {
-          await sendKeys(resolvedTarget, step.command, step.enter ?? true, resolvedHost);
-        }
+        const joined = steps.map((s) => s.command).join(separator);
+        // If newline-joined, treat as one send to keep heredoc terminators on their own line.
+        await sendKeys(resolvedTarget, joined, true, resolvedHost);
       }
 
       // allow output to flush
@@ -2154,6 +2165,33 @@ async function main() {
       return {
         content: [{ type: 'text', text: output || '(no output)' }],
       };
+    },
+  );
+
+  server.registerTool(
+    'tmux_debug_raw',
+    {
+      title: 'Debug raw tmux output',
+      description: 'Run a tmux command and return raw stdout/stderr for debugging remote formatting/quoting issues.',
+      inputSchema: {
+        host: z.string().describe('SSH host alias (optional). Uses default host if set.').optional(),
+        args: z
+          .array(z.string())
+          .nonempty()
+          .describe('Arguments to pass to tmux (do not include the tmux binary itself).'),
+      },
+    },
+    async ({ args, host }) => {
+      try {
+        const out = await runTmux(args, host);
+        return { content: [{ type: 'text', text: out || '(empty output)' }] };
+      } catch (error) {
+        const err = error as { message?: string; stderr?: string; stdout?: string };
+        const text = ['Error running tmux:', err.message || 'unknown', err.stderr || '', err.stdout || '']
+          .filter(Boolean)
+          .join('\n');
+        return { content: [{ type: 'text', text }] };
+      }
     },
   );
 
