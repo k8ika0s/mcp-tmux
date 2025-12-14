@@ -675,6 +675,30 @@ func (s *Service) ServerInfo(ctx context.Context, req *tmuxproto.ServerInfoReque
 	}, nil
 }
 
+func (s *Service) ListDefaults(ctx context.Context, req *tmuxproto.ListDefaultsRequest) (*tmuxproto.ListDefaultsResponse, error) {
+	resp := &tmuxproto.ListDefaultsResponse{}
+	if s.defaultTarget != nil {
+		resp.CurrentDefault = s.defaultTarget
+		resp.FromDisk = s.defaultsPath != ""
+	}
+	return resp, nil
+}
+
+func (s *Service) ValidateHost(ctx context.Context, req *tmuxproto.ValidateHostRequest) (*tmuxproto.ValidateHostResponse, error) {
+	h := req.GetHost()
+	if h == "" {
+		return &tmuxproto.ValidateHostResponse{Found: false}, nil
+	}
+	p, ok := s.hostProfiles[h]
+	resp := &tmuxproto.ValidateHostResponse{Found: ok}
+	if ok {
+		resp.TmuxBin = p.TmuxBin
+		resp.PathAdd = p.PathAdd
+		resp.Defaults = &tmuxproto.PaneRef{Host: h, Session: p.DefaultSession, Pane: p.DefaultPane}
+	}
+	return resp, nil
+}
+
 func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
 	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
