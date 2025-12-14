@@ -66,8 +66,8 @@ func NewService(tmuxBin string, pathAdd []string) *Service {
 func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error), meta RunMeta) *Service {
 	hp := loadHostProfiles()
 	return &Service{
-		tmuxBin: tmuxBin,
-		pathAdd: pathAdd,
+		tmuxBin:      tmuxBin,
+		pathAdd:      pathAdd,
 		hostProfiles: hp,
 		meta: RunMeta{
 			PackageName: meta.PackageName,
@@ -232,7 +232,11 @@ func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneReq
 	if lines <= 0 {
 		lines = defaultCaptureLines
 	}
-	args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", lines)}
+	start := fmt.Sprintf("-%d", lines)
+	if req.GetStart() != 0 {
+		start = fmt.Sprintf("%d", req.GetStart())
+	}
+	args := []string{"capture-pane", "-pJ", "-t", pane, "-S", start, "-N", fmt.Sprintf("%d", lines)}
 	out, err := s.runTmux(ctx, target.Host, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "capture failed: %v", err)

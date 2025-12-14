@@ -187,8 +187,8 @@ func TestBatchCapture(t *testing.T) {
 	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	resp, err := svc.BatchCapture(context.Background(), &tmuxproto.BatchCaptureRequest{
 		Requests: []*tmuxproto.CapturePaneRequest{
-			{Target: &tmuxproto.PaneRef{Session: "s1"}},
-			{Target: &tmuxproto.PaneRef{Session: "s2"}},
+			{Target: &tmuxproto.PaneRef{Session: "s1"}, Lines: 10, Start: -20},
+			{Target: &tmuxproto.PaneRef{Session: "s2"}, Lines: 5},
 		},
 	})
 	if err != nil {
