@@ -34,7 +34,7 @@ message SnapshotRequest {
   uint32 capture_lines = 2;
 }
 
-message Snapshot {
+message SnapshotResponse {
   string sessions = 1;
   string windows = 2;
   string panes = 3;
@@ -49,7 +49,7 @@ message SetDefaultResponse { string text = 1; }
 
 service TmuxService {
   rpc StreamPane(StreamPaneRequest) returns (stream PaneChunk);
-  rpc Snapshot(SnapshotRequest) returns (Snapshot);
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
   rpc ListSessions(ListRequest) returns (ListResponse);
   rpc ListWindows(ListRequest) returns (ListResponse);
   rpc ListPanes(ListRequest) returns (ListResponse);
