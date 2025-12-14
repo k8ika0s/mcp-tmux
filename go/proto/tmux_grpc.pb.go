@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.29.0
-// source: tmux.proto
+// source: proto/tmux.proto
 
 package tmuxproto
 
@@ -21,6 +21,10 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	TmuxService_StreamPane_FullMethodName   = "/mcp.tmux.v1.TmuxService/StreamPane"
 	TmuxService_Snapshot_FullMethodName     = "/mcp.tmux.v1.TmuxService/Snapshot"
+	TmuxService_CapturePane_FullMethodName  = "/mcp.tmux.v1.TmuxService/CapturePane"
+	TmuxService_RunCommand_FullMethodName   = "/mcp.tmux.v1.TmuxService/RunCommand"
+	TmuxService_SendKeys_FullMethodName     = "/mcp.tmux.v1.TmuxService/SendKeys"
+	TmuxService_RunBatch_FullMethodName     = "/mcp.tmux.v1.TmuxService/RunBatch"
 	TmuxService_ListSessions_FullMethodName = "/mcp.tmux.v1.TmuxService/ListSessions"
 	TmuxService_ListWindows_FullMethodName  = "/mcp.tmux.v1.TmuxService/ListWindows"
 	TmuxService_ListPanes_FullMethodName    = "/mcp.tmux.v1.TmuxService/ListPanes"
@@ -33,6 +37,10 @@ const (
 type TmuxServiceClient interface {
 	StreamPane(ctx context.Context, in *StreamPaneRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PaneChunk], error)
 	Snapshot(ctx context.Context, in *SnapshotRequest, opts ...grpc.CallOption) (*SnapshotResponse, error)
+	CapturePane(ctx context.Context, in *CapturePaneRequest, opts ...grpc.CallOption) (*CapturePaneResponse, error)
+	RunCommand(ctx context.Context, in *RunCommandRequest, opts ...grpc.CallOption) (*RunCommandResponse, error)
+	SendKeys(ctx context.Context, in *SendKeysRequest, opts ...grpc.CallOption) (*SendKeysResponse, error)
+	RunBatch(ctx context.Context, in *RunBatchRequest, opts ...grpc.CallOption) (*RunBatchResponse, error)
 	ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListWindows(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListPanes(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
@@ -70,6 +78,46 @@ func (c *tmuxServiceClient) Snapshot(ctx context.Context, in *SnapshotRequest, o
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SnapshotResponse)
 	err := c.cc.Invoke(ctx, TmuxService_Snapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tmuxServiceClient) CapturePane(ctx context.Context, in *CapturePaneRequest, opts ...grpc.CallOption) (*CapturePaneResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CapturePaneResponse)
+	err := c.cc.Invoke(ctx, TmuxService_CapturePane_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tmuxServiceClient) RunCommand(ctx context.Context, in *RunCommandRequest, opts ...grpc.CallOption) (*RunCommandResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunCommandResponse)
+	err := c.cc.Invoke(ctx, TmuxService_RunCommand_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tmuxServiceClient) SendKeys(ctx context.Context, in *SendKeysRequest, opts ...grpc.CallOption) (*SendKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendKeysResponse)
+	err := c.cc.Invoke(ctx, TmuxService_SendKeys_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tmuxServiceClient) RunBatch(ctx context.Context, in *RunBatchRequest, opts ...grpc.CallOption) (*RunBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunBatchResponse)
+	err := c.cc.Invoke(ctx, TmuxService_RunBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +170,10 @@ func (c *tmuxServiceClient) SetDefault(ctx context.Context, in *SetDefaultReques
 type TmuxServiceServer interface {
 	StreamPane(*StreamPaneRequest, grpc.ServerStreamingServer[PaneChunk]) error
 	Snapshot(context.Context, *SnapshotRequest) (*SnapshotResponse, error)
+	CapturePane(context.Context, *CapturePaneRequest) (*CapturePaneResponse, error)
+	RunCommand(context.Context, *RunCommandRequest) (*RunCommandResponse, error)
+	SendKeys(context.Context, *SendKeysRequest) (*SendKeysResponse, error)
+	RunBatch(context.Context, *RunBatchRequest) (*RunBatchResponse, error)
 	ListSessions(context.Context, *ListRequest) (*ListResponse, error)
 	ListWindows(context.Context, *ListRequest) (*ListResponse, error)
 	ListPanes(context.Context, *ListRequest) (*ListResponse, error)
@@ -141,6 +193,18 @@ func (UnimplementedTmuxServiceServer) StreamPane(*StreamPaneRequest, grpc.Server
 }
 func (UnimplementedTmuxServiceServer) Snapshot(context.Context, *SnapshotRequest) (*SnapshotResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Snapshot not implemented")
+}
+func (UnimplementedTmuxServiceServer) CapturePane(context.Context, *CapturePaneRequest) (*CapturePaneResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CapturePane not implemented")
+}
+func (UnimplementedTmuxServiceServer) RunCommand(context.Context, *RunCommandRequest) (*RunCommandResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCommand not implemented")
+}
+func (UnimplementedTmuxServiceServer) SendKeys(context.Context, *SendKeysRequest) (*SendKeysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SendKeys not implemented")
+}
+func (UnimplementedTmuxServiceServer) RunBatch(context.Context, *RunBatchRequest) (*RunBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunBatch not implemented")
 }
 func (UnimplementedTmuxServiceServer) ListSessions(context.Context, *ListRequest) (*ListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSessions not implemented")
@@ -200,6 +264,78 @@ func _TmuxService_Snapshot_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TmuxServiceServer).Snapshot(ctx, req.(*SnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TmuxService_CapturePane_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CapturePaneRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).CapturePane(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_CapturePane_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).CapturePane(ctx, req.(*CapturePaneRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TmuxService_RunCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCommandRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).RunCommand(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_RunCommand_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).RunCommand(ctx, req.(*RunCommandRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TmuxService_SendKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).SendKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_SendKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).SendKeys(ctx, req.(*SendKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TmuxService_RunBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).RunBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_RunBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).RunBatch(ctx, req.(*RunBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -288,6 +424,22 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TmuxService_Snapshot_Handler,
 		},
 		{
+			MethodName: "CapturePane",
+			Handler:    _TmuxService_CapturePane_Handler,
+		},
+		{
+			MethodName: "RunCommand",
+			Handler:    _TmuxService_RunCommand_Handler,
+		},
+		{
+			MethodName: "SendKeys",
+			Handler:    _TmuxService_SendKeys_Handler,
+		},
+		{
+			MethodName: "RunBatch",
+			Handler:    _TmuxService_RunBatch_Handler,
+		},
+		{
 			MethodName: "ListSessions",
 			Handler:    _TmuxService_ListSessions_Handler,
 		},
@@ -311,5 +463,5 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "tmux.proto",
+	Metadata: "proto/tmux.proto",
 }

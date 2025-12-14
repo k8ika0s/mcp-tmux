@@ -31,19 +31,9 @@ func NewService(tmuxBin string, pathAdd []string) *Service {
 }
 
 func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.TmuxService_StreamPaneServer) error {
-	if req == nil || req.Target == nil {
-		return status.Error(codes.InvalidArgument, "target required")
-	}
-	target := req.Target
-	pane := target.Pane
-	if pane == "" && target.Window != "" && target.Session != "" {
-		pane = fmt.Sprintf("%s:%s.0", target.Session, target.Window)
-	}
-	if pane == "" && target.Session != "" {
-		pane = fmt.Sprintf("%s.0", target.Session)
-	}
-	if pane == "" {
-		return status.Error(codes.InvalidArgument, "pane required")
+	target, pane, err := resolvePaneTarget(req.GetTarget())
+	if err != nil {
+		return err
 	}
 
 	ctx := stream.Context()
@@ -56,7 +46,7 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 	sendChunk := func(data string, eof bool, reason string) error {
 		seq++
 		chunk := &tmuxproto.PaneChunk{
-			Target:       req.Target,
+			Target:       target,
 			Seq:          seq,
 			TsUnixMillis: time.Now().UnixMilli(),
 			Data:         []byte(data),
@@ -116,10 +106,10 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 }
 
 func (s *Service) Snapshot(ctx context.Context, req *tmuxproto.SnapshotRequest) (*tmuxproto.SnapshotResponse, error) {
-	if req == nil || req.Target == nil {
-		return nil, status.Error(codes.InvalidArgument, "target required")
+	tgt, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
 	}
-	tgt := req.Target
 	captureLines := req.CaptureLines
 	if captureLines == 0 {
 		captureLines = defaultCaptureLines
@@ -134,11 +124,118 @@ func (s *Service) Snapshot(ctx context.Context, req *tmuxproto.SnapshotRequest) 
 	return &tmuxproto.SnapshotResponse{Sessions: sessions, Windows: windows, Panes: panes, Capture: capture}, nil
 }
 
-func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
-	if req == nil || req.Target == nil {
-		return nil, status.Error(codes.InvalidArgument, "target required")
+func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneRequest) (*tmuxproto.CapturePaneResponse, error) {
+	target, pane, err := resolvePaneTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
 	}
-	out, err := tmux.Run(ctx, req.Target.Host, s.tmuxBin, s.pathAdd, []string{"list-sessions"})
+	lines := req.Lines
+	if lines <= 0 {
+		lines = defaultCaptureLines
+	}
+	args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", lines)}
+	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "capture failed: %v", err)
+	}
+	if req.StripAnsi {
+		out = stripANSI(out)
+	}
+	truncated := false
+	if lineCount := strings.Count(out, "\n") + 1; int32(lineCount) >= lines {
+		truncated = true
+	}
+	return &tmuxproto.CapturePaneResponse{Text: out, Truncated: truncated}, nil
+}
+
+func (s *Service) RunCommand(ctx context.Context, req *tmuxproto.RunCommandRequest) (*tmuxproto.RunCommandResponse, error) {
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Args) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "args are required")
+	}
+	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, req.Args)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "tmux %v failed: %v", req.Args, err)
+	}
+	if req.StripAnsi {
+		out = stripANSI(out)
+	}
+	return &tmuxproto.RunCommandResponse{Text: out}, nil
+}
+
+func (s *Service) SendKeys(ctx context.Context, req *tmuxproto.SendKeysRequest) (*tmuxproto.SendKeysResponse, error) {
+	target, pane, err := resolvePaneTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Keys) == 0 && !req.Enter {
+		return nil, status.Error(codes.InvalidArgument, "keys or enter required")
+	}
+	args := []string{"send-keys", "-t", pane}
+	args = append(args, req.Keys...)
+	if req.Enter {
+		args = append(args, "Enter")
+	}
+	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "send-keys failed: %v", err)
+	}
+	if out == "" {
+		out = "(no output)"
+	}
+	return &tmuxproto.SendKeysResponse{Text: out}, nil
+}
+
+func (s *Service) RunBatch(ctx context.Context, req *tmuxproto.RunBatchRequest) (*tmuxproto.RunBatchResponse, error) {
+	target, pane, err := resolvePaneTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Steps) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "steps are required")
+	}
+	joiner := req.JoinWith
+	if joiner == "" {
+		joiner = "&&"
+	}
+	cmd := strings.Join(req.Steps, fmt.Sprintf(" %s ", joiner))
+
+	if req.CleanPrompt {
+		_, _ = tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"send-keys", "-t", pane, "C-c", "C-u"})
+	}
+
+	_, err = tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"send-keys", "-t", pane, cmd, "Enter"})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "run batch failed: %v", err)
+	}
+
+	resp := &tmuxproto.RunBatchResponse{Text: "batch sent"}
+	if req.CaptureLines > 0 {
+		captureLines := req.CaptureLines
+		args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", captureLines)}
+		capOut, capErr := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+		if capErr == nil {
+			if req.StripAnsi {
+				capOut = stripANSI(capOut)
+			}
+			resp.Capture = capOut
+			if lineCount := strings.Count(capOut, "\n") + 1; int32(lineCount) >= captureLines {
+				resp.Truncated = true
+			}
+		}
+	}
+	return resp, nil
+}
+
+func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"list-sessions"})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -146,14 +243,15 @@ func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) 
 }
 
 func (s *Service) ListWindows(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
-	if req == nil || req.Target == nil {
-		return nil, status.Error(codes.InvalidArgument, "target required")
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
 	}
 	args := []string{"list-windows"}
-	if req.Target.Session != "" {
-		args = append(args, "-t", req.Target.Session)
+	if target.Session != "" {
+		args = append(args, "-t", target.Session)
 	}
-	out, err := tmux.Run(ctx, req.Target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -161,14 +259,15 @@ func (s *Service) ListWindows(ctx context.Context, req *tmuxproto.ListRequest) (
 }
 
 func (s *Service) ListPanes(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
-	if req == nil || req.Target == nil {
-		return nil, status.Error(codes.InvalidArgument, "target required")
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
 	}
 	args := []string{"list-panes"}
-	if req.Target.Session != "" {
-		args = append(args, "-t", req.Target.Session)
+	if target.Session != "" {
+		args = append(args, "-t", target.Session)
 	}
-	out, err := tmux.Run(ctx, req.Target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -176,10 +275,11 @@ func (s *Service) ListPanes(ctx context.Context, req *tmuxproto.ListRequest) (*t
 }
 
 func (s *Service) SetDefault(ctx context.Context, req *tmuxproto.SetDefaultRequest) (*tmuxproto.SetDefaultResponse, error) {
-	if req == nil || req.Target == nil {
-		return nil, status.Error(codes.InvalidArgument, "target required")
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
 	}
-	msg := fmt.Sprintf("Defaults set host=%s session=%s window=%s pane=%s", req.Target.Host, req.Target.Session, req.Target.Window, req.Target.Pane)
+	msg := fmt.Sprintf("Defaults set host=%s session=%s window=%s pane=%s", target.Host, target.Session, target.Window, target.Pane)
 	return &tmuxproto.SetDefaultResponse{Text: msg}, nil
 }
 
@@ -187,4 +287,29 @@ var ansiRegex = regexp.MustCompile(`[\u001B\u009B][[\]()#;?]*(?:(?:[0-9]{1,4}(?:
 
 func stripANSI(s string) string {
 	return ansiRegex.ReplaceAllString(s, "")
+}
+
+func requireTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneRef, error) {
+	if target == nil {
+		return nil, status.Error(codes.InvalidArgument, "target required")
+	}
+	return target, nil
+}
+
+func resolvePaneTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneRef, string, error) {
+	target, err := requireTarget(target)
+	if err != nil {
+		return nil, "", err
+	}
+	pane := target.Pane
+	if pane == "" && target.Window != "" && target.Session != "" {
+		pane = fmt.Sprintf("%s:%s.0", target.Session, target.Window)
+	}
+	if pane == "" && target.Session != "" {
+		pane = fmt.Sprintf("%s.0", target.Session)
+	}
+	if pane == "" {
+		return nil, "", status.Error(codes.InvalidArgument, "pane required")
+	}
+	return target, pane, nil
 }

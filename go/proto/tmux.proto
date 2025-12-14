@@ -47,9 +47,55 @@ message ListResponse { string text = 1; }
 message SetDefaultRequest { PaneRef target = 1; }
 message SetDefaultResponse { string text = 1; }
 
+message CapturePaneRequest {
+  PaneRef target = 1;
+  int32 lines = 2;        // negative or zero -> default tail
+  bool strip_ansi = 3;
+}
+
+message CapturePaneResponse {
+  string text = 1;
+  bool truncated = 2;
+}
+
+message RunCommandRequest {
+  PaneRef target = 1;
+  repeated string args = 2;
+  bool strip_ansi = 3;
+}
+
+message RunCommandResponse { string text = 1; }
+
+message SendKeysRequest {
+  PaneRef target = 1;
+  repeated string keys = 2;
+  bool enter = 3;
+}
+
+message SendKeysResponse { string text = 1; }
+
+message RunBatchRequest {
+  PaneRef target = 1;
+  repeated string steps = 2;   // shell fragments to join
+  string join_with = 3;        // default "&&"
+  bool clean_prompt = 4;       // send C-c/C-u before running
+  bool strip_ansi = 5;
+  int32 capture_lines = 6;     // optional capture after run (0 = skip)
+}
+
+message RunBatchResponse {
+  string text = 1;             // status message
+  string capture = 2;          // optional capture text
+  bool truncated = 3;
+}
+
 service TmuxService {
   rpc StreamPane(StreamPaneRequest) returns (stream PaneChunk);
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+  rpc CapturePane(CapturePaneRequest) returns (CapturePaneResponse);
+  rpc RunCommand(RunCommandRequest) returns (RunCommandResponse);
+  rpc SendKeys(SendKeysRequest) returns (SendKeysResponse);
+  rpc RunBatch(RunBatchRequest) returns (RunBatchResponse);
   rpc ListSessions(ListRequest) returns (ListResponse);
   rpc ListWindows(ListRequest) returns (ListResponse);
   rpc ListPanes(ListRequest) returns (ListResponse);
