@@ -1,15 +1,20 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/k8ika0s/mcp-tmux/go/internal/tmux"
 	tmuxproto "github.com/k8ika0s/mcp-tmux/go/proto"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -54,6 +59,17 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 			interval = 50 * time.Millisecond
 		}
 	}
+	maxBytes := req.MaxChunkBytes
+	if maxBytes == 0 {
+		maxBytes = 8192
+	}
+
+	if target.Host == "" && req.PollMillis == 0 {
+		if err := s.streamViaPipe(ctx, stream, target, pane, req.StripAnsi, maxBytes, interval, seq); err == nil {
+			return nil
+		}
+	}
+
 	ticker := time.NewTicker(interval)
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
@@ -76,10 +92,6 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 	last := ""
 	captureArgs := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", defaultCaptureLines)}
 	strip := req.StripAnsi
-	maxBytes := req.MaxChunkBytes
-	if maxBytes == 0 {
-		maxBytes = 8192
-	}
 
 	for {
 		select {
@@ -424,6 +436,105 @@ var ansiRegex = regexp.MustCompile(`[\x1B\x9B][[\]()#;?]*(?:(?:[0-9]{1,4}(?:;[0-
 
 func stripANSI(s string) string {
 	return ansiRegex.ReplaceAllString(s, "")
+}
+
+func syscallMkfifo(path string, mode uint32) error {
+	return unix.Mkfifo(path, mode)
+}
+
+func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxService_StreamPaneServer, target *tmuxproto.PaneRef, pane string, strip bool, maxBytes uint32, interval time.Duration, startSeq uint64) error {
+	dir, err := os.MkdirTemp("", "tmux-stream-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	pipePath := filepath.Join(dir, "pipe")
+	if err := syscallMkfifo(pipePath, 0600); err != nil {
+		return err
+	}
+
+	startArgs := []string{"pipe-pane", "-t", pane, fmt.Sprintf("cat >> %s", pipePath)}
+	if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, startArgs); err != nil {
+		return err
+	}
+	defer s.run(context.Background(), target.Host, s.tmuxBin, s.pathAdd, []string{"pipe-pane", "-t", pane})
+
+	f, err := os.Open(pipePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	reader := bufio.NewReader(f)
+
+	seq := startSeq
+	sendChunk := func(data []byte, heartbeat bool, eof bool, reason string) error {
+		seq++
+		chunk := &tmuxproto.PaneChunk{
+			Target:       target,
+			Seq:          seq,
+			TsUnixMillis: time.Now().UnixMilli(),
+			Data:         data,
+			Heartbeat:    heartbeat,
+			Eof:          eof,
+			Reason:       reason,
+		}
+		return stream.Send(chunk)
+	}
+
+	heartbeat := time.NewTicker(heartbeatInterval)
+	defer heartbeat.Stop()
+	done := make(chan error, 1)
+
+	go func() {
+		for {
+			buf := make([]byte, 4096)
+			n, readErr := reader.Read(buf)
+			if n > 0 {
+				data := buf[:n]
+				if strip {
+					data = []byte(stripANSI(string(data)))
+				}
+				for len(data) > 0 {
+					chunk := data
+					if maxBytes > 0 && len(chunk) > int(maxBytes) {
+						chunk = data[:maxBytes]
+						data = data[maxBytes:]
+					} else {
+						data = nil
+					}
+					if err := sendChunk(chunk, false, false, ""); err != nil {
+						done <- err
+						return
+					}
+				}
+			}
+			if readErr != nil {
+				if readErr == io.EOF {
+					done <- nil
+				} else {
+					done <- readErr
+				}
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-done:
+			if err != nil {
+				return err
+			}
+			_ = sendChunk(nil, false, true, "eof")
+			return nil
+		case <-heartbeat.C:
+			if err := sendChunk(nil, true, false, ""); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func requireTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneRef, error) {

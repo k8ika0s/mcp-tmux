@@ -229,7 +229,8 @@ func TestStreamPaneDelta(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &stubStream{ctx: ctx, cancel: cancel}
 	err := svc.StreamPane(&tmuxproto.StreamPaneRequest{
-		Target: &tmuxproto.PaneRef{Session: "s"},
+		Target:     &tmuxproto.PaneRef{Session: "s"},
+		PollMillis: 10,
 	}, stream)
 	if err != nil {
 		t.Fatalf("StreamPane error: %v", err)
