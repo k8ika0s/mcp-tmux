@@ -29,7 +29,7 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 ## API surface (current)
 
 - `StreamPane`: streaming pane output with seq/ts/heartbeat/eof; optional ANSI stripping and chunk truncation.
--   - Local targets default to a tmux `pipe-pane` stream; set `poll_millis` to force polling (min ~50ms) or to throttle updates.
+-   - Local targets default to a tmux `pipe-pane` stream; remote targets try the same via ssh cat of a remote fifo. Set `poll_millis` to force polling (min ~50ms) or to throttle updates.
 - `CapturePane`: tail a pane with a line budget and optional ANSI stripping.
 - `RunCommand`: run arbitrary tmux subcommands (raw args) on a host.
 - `SendKeys`: send keys (and optionally Enter) to a pane.

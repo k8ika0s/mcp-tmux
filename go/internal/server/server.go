@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -64,7 +66,7 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 		maxBytes = 8192
 	}
 
-	if target.Host == "" && req.PollMillis == 0 {
+	if req.PollMillis == 0 {
 		if err := s.streamViaPipe(ctx, stream, target, pane, req.StripAnsi, maxBytes, interval, seq); err == nil {
 			return nil
 		}
@@ -443,28 +445,71 @@ func syscallMkfifo(path string, mode uint32) error {
 }
 
 func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxService_StreamPaneServer, target *tmuxproto.PaneRef, pane string, strip bool, maxBytes uint32, interval time.Duration, startSeq uint64) error {
-	dir, err := os.MkdirTemp("", "tmux-stream-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	pipePath := filepath.Join(dir, "pipe")
-	if err := syscallMkfifo(pipePath, 0600); err != nil {
-		return err
+	pipeDir := fmt.Sprintf("/tmp/mcp-tmux-%d-%d", time.Now().UnixNano(), rand.Intn(10000))
+	pipePath := filepath.Join(pipeDir, "pipe")
+	cleanup := func() {
+		if target.Host != "" {
+			_, _ = s.run(context.Background(), target.Host, s.tmuxBin, s.pathAdd, []string{"run-shell", fmt.Sprintf("rm -rf %s", pipeDir)})
+		} else {
+			_ = os.RemoveAll(pipeDir)
+		}
 	}
 
-	startArgs := []string{"pipe-pane", "-t", pane, fmt.Sprintf("cat >> %s", pipePath)}
-	if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, startArgs); err != nil {
-		return err
+	var reader io.ReadCloser
+
+	if target.Host == "" {
+		if err := os.MkdirAll(pipeDir, 0700); err != nil {
+			return err
+		}
+		if err := syscallMkfifo(pipePath, 0600); err != nil {
+			_ = os.RemoveAll(pipeDir)
+			return err
+		}
+		startArgs := []string{"pipe-pane", "-t", pane, fmt.Sprintf("cat >> %s", pipePath)}
+		if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, startArgs); err != nil {
+			_ = os.RemoveAll(pipeDir)
+			return err
+		}
+		f, err := os.Open(pipePath)
+		if err != nil {
+			_ = os.RemoveAll(pipeDir)
+			return err
+		}
+		reader = f
+	} else {
+		start := []string{
+			"run-shell",
+			fmt.Sprintf("mkdir -p %s && rm -f %s && mkfifo %s", pipeDir, pipePath, pipePath),
+		}
+		if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, start); err != nil {
+			return err
+		}
+		pipeCmd := fmt.Sprintf("cat >> %s", pipePath)
+		if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"pipe-pane", "-t", pane, pipeCmd}); err != nil {
+			cleanup()
+			return err
+		}
+		sshCmd := exec.CommandContext(ctx, "ssh", "-T", target.Host, "cat", pipePath)
+		stdout, err := sshCmd.StdoutPipe()
+		if err != nil {
+			cleanup()
+			return err
+		}
+		if err := sshCmd.Start(); err != nil {
+			cleanup()
+			return err
+		}
+		reader = stdout
+		go func() {
+			<-ctx.Done()
+			_ = sshCmd.Process.Kill()
+		}()
 	}
+	defer cleanup()
+
 	defer s.run(context.Background(), target.Host, s.tmuxBin, s.pathAdd, []string{"pipe-pane", "-t", pane})
 
-	f, err := os.Open(pipePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	reader := bufio.NewReader(f)
+	bufReader := bufio.NewReader(reader)
 
 	seq := startSeq
 	sendChunk := func(data []byte, heartbeat bool, eof bool, reason string) error {
@@ -488,7 +533,7 @@ func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxServic
 	go func() {
 		for {
 			buf := make([]byte, 4096)
-			n, readErr := reader.Read(buf)
+			n, readErr := bufReader.Read(buf)
 			if n > 0 {
 				data := buf[:n]
 				if strip {
