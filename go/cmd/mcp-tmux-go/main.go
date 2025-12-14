@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/k8ika0s/mcp-tmux/go/internal/server"
@@ -24,6 +26,8 @@ func main() {
 	version := flag.String("version", "dev", "version to report in ServerInfo")
 	repo := flag.String("repo", "https://github.com/k8ika0s/mcp-tmux", "repo URL to report in ServerInfo")
 	authToken := flag.String("auth-token", "", "optional bearer/token required on incoming calls (authorization or x-mcp-token)")
+	logFile := flag.String("log-file", "", "optional path to append audit logs")
+	logColor := flag.Bool("log-color", true, "colorize audit logs")
 	flag.Parse()
 
 	lis, err := net.Listen("tcp", *addr)
@@ -31,8 +35,17 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 
+	if *logFile != "" {
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			log.Fatalf("open log file: %v", err)
+		}
+		log.SetOutput(io.MultiWriter(os.Stdout, f))
+	}
+
 	opts := []grpc.ServerOption{}
 	opts = append(opts, server.AuthOptions(*authToken)...)
+	opts = append(opts, server.AuditOptions(*logColor)...)
 	grpcServer := grpc.NewServer(opts...)
 	meta := server.RunMeta{
 		PackageName: *pkgName,

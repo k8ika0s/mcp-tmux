@@ -46,5 +46,6 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 - Defaults: `SetDefault` stores host/session/window/pane defaults; subsequent calls can omit targets and will fall back to stored defaults.
 - Batch capture: `BatchCapture` aggregates multiple `CapturePane` calls in one RPC.
 - Host profiles: optional JSON at `$MCP_TMUX_HOSTS_FILE` (default `~/.config/mcp-tmux/hosts.json`) with per-host `tmuxBin`, `pathAdd`, and default session/pane.
+- Logging: `--log-file` to tee audit logs to disk; `--log-color` to toggle ANSI colors.
 
 Notes: StreamPane still uses `capture-pane` polling; swapping to `pipe-pane` tailing would provide near-real-time streaming. Auth/z-audit still to be added to mirror the Node MCP server.
