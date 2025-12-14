@@ -26,6 +26,7 @@ const (
 	TmuxService_SendKeys_FullMethodName      = "/mcp.tmux.v1.TmuxService/SendKeys"
 	TmuxService_RunBatch_FullMethodName      = "/mcp.tmux.v1.TmuxService/RunBatch"
 	TmuxService_MultiRun_FullMethodName      = "/mcp.tmux.v1.TmuxService/MultiRun"
+	TmuxService_BatchCapture_FullMethodName  = "/mcp.tmux.v1.TmuxService/BatchCapture"
 	TmuxService_CaptureLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/CaptureLayout"
 	TmuxService_RestoreLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/RestoreLayout"
 	TmuxService_NewSession_FullMethodName    = "/mcp.tmux.v1.TmuxService/NewSession"
@@ -48,6 +49,7 @@ type TmuxServiceClient interface {
 	SendKeys(ctx context.Context, in *SendKeysRequest, opts ...grpc.CallOption) (*SendKeysResponse, error)
 	RunBatch(ctx context.Context, in *RunBatchRequest, opts ...grpc.CallOption) (*RunBatchResponse, error)
 	MultiRun(ctx context.Context, in *MultiRunRequest, opts ...grpc.CallOption) (*MultiRunResponse, error)
+	BatchCapture(ctx context.Context, in *BatchCaptureRequest, opts ...grpc.CallOption) (*BatchCaptureResponse, error)
 	CaptureLayout(ctx context.Context, in *CaptureLayoutRequest, opts ...grpc.CallOption) (*CaptureLayoutResponse, error)
 	RestoreLayout(ctx context.Context, in *RestoreLayoutRequest, opts ...grpc.CallOption) (*RestoreLayoutResponse, error)
 	NewSession(ctx context.Context, in *NewSessionRequest, opts ...grpc.CallOption) (*NewSessionResponse, error)
@@ -140,6 +142,16 @@ func (c *tmuxServiceClient) MultiRun(ctx context.Context, in *MultiRunRequest, o
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MultiRunResponse)
 	err := c.cc.Invoke(ctx, TmuxService_MultiRun_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tmuxServiceClient) BatchCapture(ctx context.Context, in *BatchCaptureRequest, opts ...grpc.CallOption) (*BatchCaptureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BatchCaptureResponse)
+	err := c.cc.Invoke(ctx, TmuxService_BatchCapture_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -247,6 +259,7 @@ type TmuxServiceServer interface {
 	SendKeys(context.Context, *SendKeysRequest) (*SendKeysResponse, error)
 	RunBatch(context.Context, *RunBatchRequest) (*RunBatchResponse, error)
 	MultiRun(context.Context, *MultiRunRequest) (*MultiRunResponse, error)
+	BatchCapture(context.Context, *BatchCaptureRequest) (*BatchCaptureResponse, error)
 	CaptureLayout(context.Context, *CaptureLayoutRequest) (*CaptureLayoutResponse, error)
 	RestoreLayout(context.Context, *RestoreLayoutRequest) (*RestoreLayoutResponse, error)
 	NewSession(context.Context, *NewSessionRequest) (*NewSessionResponse, error)
@@ -286,6 +299,9 @@ func (UnimplementedTmuxServiceServer) RunBatch(context.Context, *RunBatchRequest
 }
 func (UnimplementedTmuxServiceServer) MultiRun(context.Context, *MultiRunRequest) (*MultiRunResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MultiRun not implemented")
+}
+func (UnimplementedTmuxServiceServer) BatchCapture(context.Context, *BatchCaptureRequest) (*BatchCaptureResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BatchCapture not implemented")
 }
 func (UnimplementedTmuxServiceServer) CaptureLayout(context.Context, *CaptureLayoutRequest) (*CaptureLayoutResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CaptureLayout not implemented")
@@ -450,6 +466,24 @@ func _TmuxService_MultiRun_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TmuxServiceServer).MultiRun(ctx, req.(*MultiRunRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TmuxService_BatchCapture_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BatchCaptureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).BatchCapture(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_BatchCapture_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).BatchCapture(ctx, req.(*BatchCaptureRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -646,6 +680,10 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MultiRun",
 			Handler:    _TmuxService_MultiRun_Handler,
+		},
+		{
+			MethodName: "BatchCapture",
+			Handler:    _TmuxService_BatchCapture_Handler,
 		},
 		{
 			MethodName: "CaptureLayout",

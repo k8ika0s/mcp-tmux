@@ -138,6 +138,31 @@ func TestRunCommandDestructiveGuard(t *testing.T) {
 	}
 }
 
+func TestDefaultsResolution(t *testing.T) {
+	svc := NewServiceWithRunner("tmux", nil, (&fakeRunner{}).run, RunMeta{})
+	_, err := svc.SetDefault(context.Background(), &tmuxproto.SetDefaultRequest{
+		Target: &tmuxproto.PaneRef{Session: "s"},
+	})
+	if err != nil {
+		t.Fatalf("SetDefault error: %v", err)
+	}
+	_, err = svc.CapturePane(context.Background(), &tmuxproto.CapturePaneRequest{})
+	if err != nil {
+		t.Fatalf("expected capture to use default session pane: %v", err)
+	}
+	// set pane default
+	_, err = svc.SetDefault(context.Background(), &tmuxproto.SetDefaultRequest{
+		Target: &tmuxproto.PaneRef{Session: "s", Pane: "s.0"},
+	})
+	if err != nil {
+		t.Fatalf("SetDefault pane error: %v", err)
+	}
+	_, err = svc.SendKeys(context.Background(), &tmuxproto.SendKeysRequest{Enter: true})
+	if err != nil {
+		t.Fatalf("SendKeys with default pane error: %v", err)
+	}
+}
+
 func TestMultiRunAggregates(t *testing.T) {
 	r := &fakeRunner{outputs: []string{"ok"}}
 	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})

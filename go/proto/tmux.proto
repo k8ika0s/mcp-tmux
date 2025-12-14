@@ -55,8 +55,17 @@ message CapturePaneRequest {
 }
 
 message CapturePaneResponse {
-  string text = 1;
-  bool truncated = 2;
+  PaneRef target = 1;
+  string text = 2;
+  bool truncated = 3;
+}
+
+message BatchCaptureRequest {
+  repeated CapturePaneRequest requests = 1;
+}
+
+message BatchCaptureResponse {
+  repeated CapturePaneResponse captures = 1;
 }
 
 message RunCommandRequest {
@@ -161,6 +170,7 @@ service TmuxService {
   rpc SendKeys(SendKeysRequest) returns (SendKeysResponse);
   rpc RunBatch(RunBatchRequest) returns (RunBatchResponse);
   rpc MultiRun(MultiRunRequest) returns (MultiRunResponse);
+  rpc BatchCapture(BatchCaptureRequest) returns (BatchCaptureResponse);
   rpc CaptureLayout(CaptureLayoutRequest) returns (CaptureLayoutResponse);
   rpc RestoreLayout(RestoreLayoutRequest) returns (RestoreLayoutResponse);
   rpc NewSession(NewSessionRequest) returns (NewSessionResponse);

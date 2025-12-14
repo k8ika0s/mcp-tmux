@@ -43,5 +43,7 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 - Auth: optional `--auth-token` enables bearer/x-mcp-token checks for all unary/stream RPCs.
 - Audit logging: colorful, structured logs for all calls (method, target, status, duration) are emitted server-side.
 - Safety: destructive `RunCommand` verbs (kill*/unlink/attach -k) require `confirm=true`.
+- Defaults: `SetDefault` stores host/session/window/pane defaults; subsequent calls can omit targets and will fall back to stored defaults.
+- Batch capture: `BatchCapture` aggregates multiple `CapturePane` calls in one RPC.
 
 Notes: StreamPane still uses `capture-pane` polling; swapping to `pipe-pane` tailing would provide near-real-time streaming. Auth/z-audit still to be added to mirror the Node MCP server.

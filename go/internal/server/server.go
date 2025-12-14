@@ -38,10 +38,11 @@ type RunMeta struct {
 }
 
 type Service struct {
-	tmuxBin string
-	pathAdd []string
-	meta    RunMeta
-	run     func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
+	tmuxBin       string
+	pathAdd       []string
+	meta          RunMeta
+	defaultTarget *tmuxproto.PaneRef
+	run           func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
 	tmuxproto.UnimplementedTmuxServiceServer
 }
 
@@ -74,7 +75,7 @@ func MakeRunnerWithMeta(meta RunMeta) func(ctx context.Context, host, tmuxBin st
 }
 
 func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.TmuxService_StreamPaneServer) error {
-	target, pane, err := resolvePaneTarget(req.GetTarget())
+	target, pane, err := s.resolvePaneTarget(req.GetTarget())
 	if err != nil {
 		return err
 	}
@@ -163,7 +164,7 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 }
 
 func (s *Service) Snapshot(ctx context.Context, req *tmuxproto.SnapshotRequest) (*tmuxproto.SnapshotResponse, error) {
-	tgt, err := requireTarget(req.GetTarget())
+	tgt, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +183,7 @@ func (s *Service) Snapshot(ctx context.Context, req *tmuxproto.SnapshotRequest) 
 }
 
 func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneRequest) (*tmuxproto.CapturePaneResponse, error) {
-	target, pane, err := resolvePaneTarget(req.GetTarget())
+	target, pane, err := s.resolvePaneTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -202,11 +203,26 @@ func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneReq
 	if lineCount := strings.Count(out, "\n") + 1; int32(lineCount) >= lines {
 		truncated = true
 	}
-	return &tmuxproto.CapturePaneResponse{Text: out, Truncated: truncated}, nil
+	return &tmuxproto.CapturePaneResponse{Target: target, Text: out, Truncated: truncated}, nil
+}
+
+func (s *Service) BatchCapture(ctx context.Context, req *tmuxproto.BatchCaptureRequest) (*tmuxproto.BatchCaptureResponse, error) {
+	if len(req.Requests) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "requests are required")
+	}
+	caps := make([]*tmuxproto.CapturePaneResponse, 0, len(req.Requests))
+	for _, r := range req.Requests {
+		capResp, err := s.CapturePane(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		caps = append(caps, capResp)
+	}
+	return &tmuxproto.BatchCaptureResponse{Captures: caps}, nil
 }
 
 func (s *Service) RunCommand(ctx context.Context, req *tmuxproto.RunCommandRequest) (*tmuxproto.RunCommandResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +243,7 @@ func (s *Service) RunCommand(ctx context.Context, req *tmuxproto.RunCommandReque
 }
 
 func (s *Service) SendKeys(ctx context.Context, req *tmuxproto.SendKeysRequest) (*tmuxproto.SendKeysResponse, error) {
-	target, pane, err := resolvePaneTarget(req.GetTarget())
+	target, pane, err := s.resolvePaneTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +266,7 @@ func (s *Service) SendKeys(ctx context.Context, req *tmuxproto.SendKeysRequest) 
 }
 
 func (s *Service) RunBatch(ctx context.Context, req *tmuxproto.RunBatchRequest) (*tmuxproto.RunBatchResponse, error) {
-	target, pane, err := resolvePaneTarget(req.GetTarget())
+	target, pane, err := s.resolvePaneTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +312,7 @@ func (s *Service) MultiRun(ctx context.Context, req *tmuxproto.MultiRunRequest) 
 	}
 	results := make([]*tmuxproto.MultiRunResult, 0, len(req.Steps))
 	for _, step := range req.Steps {
-		target, err := requireTarget(step.GetTarget())
+		target, err := s.requireTarget(step.GetTarget())
 		if err != nil {
 			results = append(results, &tmuxproto.MultiRunResult{Target: step.GetTarget(), Error: err.Error()})
 			continue
@@ -319,7 +335,7 @@ func (s *Service) MultiRun(ctx context.Context, req *tmuxproto.MultiRunRequest) 
 }
 
 func (s *Service) CaptureLayout(ctx context.Context, req *tmuxproto.CaptureLayoutRequest) (*tmuxproto.CaptureLayoutResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +366,7 @@ func (s *Service) CaptureLayout(ctx context.Context, req *tmuxproto.CaptureLayou
 }
 
 func (s *Service) RestoreLayout(ctx context.Context, req *tmuxproto.RestoreLayoutRequest) (*tmuxproto.RestoreLayoutResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +386,7 @@ func (s *Service) RestoreLayout(ctx context.Context, req *tmuxproto.RestoreLayou
 }
 
 func (s *Service) NewSession(ctx context.Context, req *tmuxproto.NewSessionRequest) (*tmuxproto.NewSessionResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +407,7 @@ func (s *Service) NewSession(ctx context.Context, req *tmuxproto.NewSessionReque
 }
 
 func (s *Service) NewWindow(ctx context.Context, req *tmuxproto.NewWindowRequest) (*tmuxproto.NewWindowResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -420,7 +436,7 @@ func (s *Service) ServerInfo(ctx context.Context, req *tmuxproto.ServerInfoReque
 }
 
 func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +448,7 @@ func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) 
 }
 
 func (s *Service) ListWindows(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +464,7 @@ func (s *Service) ListWindows(ctx context.Context, req *tmuxproto.ListRequest) (
 }
 
 func (s *Service) ListPanes(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
@@ -464,10 +480,11 @@ func (s *Service) ListPanes(ctx context.Context, req *tmuxproto.ListRequest) (*t
 }
 
 func (s *Service) SetDefault(ctx context.Context, req *tmuxproto.SetDefaultRequest) (*tmuxproto.SetDefaultResponse, error) {
-	target, err := requireTarget(req.GetTarget())
+	target, err := s.requireTarget(req.GetTarget())
 	if err != nil {
 		return nil, err
 	}
+	s.defaultTarget = target
 	msg := fmt.Sprintf("Defaults set host=%s session=%s window=%s pane=%s", target.Host, target.Session, target.Window, target.Pane)
 	return &tmuxproto.SetDefaultResponse{Text: msg}, nil
 }
@@ -646,15 +663,18 @@ func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxServic
 	}
 }
 
-func requireTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneRef, error) {
+func (s *Service) requireTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneRef, error) {
 	if target == nil {
+		if s.defaultTarget != nil {
+			return s.defaultTarget, nil
+		}
 		return nil, status.Error(codes.InvalidArgument, "target required")
 	}
 	return target, nil
 }
 
-func resolvePaneTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneRef, string, error) {
-	target, err := requireTarget(target)
+func (s *Service) resolvePaneTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneRef, string, error) {
+	target, err := s.requireTarget(target)
 	if err != nil {
 		return nil, "", err
 	}
@@ -666,7 +686,7 @@ func resolvePaneTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneRef, string, e
 		pane = fmt.Sprintf("%s.0", target.Session)
 	}
 	if pane == "" {
-		return nil, "", status.Error(codes.InvalidArgument, "pane required")
+		return nil, "", status.Error(codes.InvalidArgument, "pane required (set defaults or provide pane/session/window)")
 	}
 	return target, pane, nil
 }
