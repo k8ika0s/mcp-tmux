@@ -29,6 +29,7 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 ## API surface (current)
 
 - `StreamPane`: poll-based stream with seq/ts/heartbeat/eof; optional ANSI stripping and chunk truncation.
+-   - You can override polling with `poll_millis` on the request (minimum ~50ms) to emulate near-live “pipe-pane”-like streaming without managing pipes.
 - `CapturePane`: tail a pane with a line budget and optional ANSI stripping.
 - `RunCommand`: run arbitrary tmux subcommands (raw args) on a host.
 - `SendKeys`: send keys (and optionally Enter) to a pane.

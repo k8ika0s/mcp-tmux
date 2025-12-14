@@ -16,6 +16,7 @@ message StreamPaneRequest {
   uint64 from_seq = 2;
   bool strip_ansi = 3;
   uint32 max_chunk_bytes = 4;
+  uint32 poll_millis = 5;      // optional: override poll interval (defaults to 1000ms)
 }
 
 message PaneChunk {

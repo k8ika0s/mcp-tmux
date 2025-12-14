@@ -47,7 +47,14 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 
 	ctx := stream.Context()
 	seq := req.FromSeq
-	ticker := time.NewTicker(pollInterval)
+	interval := pollInterval
+	if req.PollMillis > 0 {
+		interval = time.Duration(req.PollMillis) * time.Millisecond
+		if interval < 50*time.Millisecond {
+			interval = 50 * time.Millisecond
+		}
+	}
+	ticker := time.NewTicker(interval)
 	heartbeat := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
 	defer heartbeat.Stop()
