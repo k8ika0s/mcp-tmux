@@ -23,6 +23,7 @@ func main() {
 	pkgName := flag.String("pkg", "github.com/k8ika0s/mcp-tmux", "package name to report in ServerInfo")
 	version := flag.String("version", "dev", "version to report in ServerInfo")
 	repo := flag.String("repo", "https://github.com/k8ika0s/mcp-tmux", "repo URL to report in ServerInfo")
+	authToken := flag.String("auth-token", "", "optional bearer/token required on incoming calls (authorization or x-mcp-token)")
 	flag.Parse()
 
 	lis, err := net.Listen("tcp", *addr)
@@ -30,7 +31,9 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 
-	grpcServer := grpc.NewServer()
+	opts := []grpc.ServerOption{}
+	opts = append(opts, server.AuthOptions(*authToken)...)
+	grpcServer := grpc.NewServer(opts...)
 	meta := server.RunMeta{
 		PackageName: *pkgName,
 		Version:     *version,
