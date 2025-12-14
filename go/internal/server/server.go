@@ -105,12 +105,16 @@ type defaultTargetStore struct {
 	Pane    string `json:"pane"`
 }
 
+type layoutStore map[string][]tmuxproto.WindowLayout
+
 type Service struct {
 	tmuxBin       string
 	pathAdd       []string
 	meta          RunMeta
 	hostProfiles  map[string]hostProfile
 	defaultsPath  string
+	layoutsPath   string
+	layoutStore   layoutStore
 	defaultTarget *tmuxproto.PaneRef
 	run           func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
 	tmuxproto.UnimplementedTmuxServiceServer
@@ -127,12 +131,15 @@ func NewService(tmuxBin string, pathAdd []string) *Service {
 func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error), meta RunMeta) *Service {
 	hp := loadHostProfiles()
 	defPath, defTarget := loadDefaultTarget()
+	layoutPath, layoutProfiles := loadLayouts()
 	return &Service{
 		tmuxBin:       tmuxBin,
 		pathAdd:       pathAdd,
 		hostProfiles:  hp,
 		defaultsPath:  defPath,
+		layoutsPath:   layoutPath,
 		defaultTarget: defTarget,
+		layoutStore:   layoutProfiles,
 		meta: RunMeta{
 			PackageName: meta.PackageName,
 			Version:     meta.Version,
@@ -216,6 +223,33 @@ func persistDefaultTarget(path string, target *tmuxproto.PaneRef) {
 		Pane:    target.Pane,
 	}
 	if data, err := json.MarshalIndent(store, "", "  "); err == nil {
+		_ = os.WriteFile(path, data, 0o644)
+	}
+}
+
+func loadLayouts() (string, layoutStore) {
+	path := os.Getenv("MCP_TMUX_LAYOUTS_FILE")
+	if path == "" {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, ".config", "mcp-tmux", "layouts.json")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return path, layoutStore{}
+	}
+	var ls layoutStore
+	if err := json.Unmarshal(data, &ls); err != nil {
+		return path, layoutStore{}
+	}
+	return path, ls
+}
+
+func persistLayouts(path string, ls layoutStore) {
+	if path == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	if data, err := json.MarshalIndent(ls, "", "  "); err == nil {
 		_ = os.WriteFile(path, data, 0o644)
 	}
 }
@@ -623,6 +657,39 @@ func (s *Service) RestoreLayout(ctx context.Context, req *tmuxproto.RestoreLayou
 		}
 	}
 	return &tmuxproto.RestoreLayoutResponse{Text: "layouts applied"}, nil
+}
+
+func (s *Service) SaveLayout(ctx context.Context, req *tmuxproto.SaveLayoutRequest) (*tmuxproto.SaveLayoutResponse, error) {
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "name required")
+	}
+	if len(req.Layouts) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "layouts required")
+	}
+	if s.layoutStore == nil {
+		s.layoutStore = layoutStore{}
+	}
+	converted := make([]tmuxproto.WindowLayout, len(req.Layouts))
+	for i, l := range req.Layouts {
+		if l != nil {
+			converted[i] = *l
+		}
+	}
+	s.layoutStore[req.Name] = converted
+	persistLayouts(s.layoutsPath, s.layoutStore)
+	return &tmuxproto.SaveLayoutResponse{Text: fmt.Sprintf("layout %s saved", req.Name)}, nil
+}
+
+func (s *Service) ListSavedLayouts(ctx context.Context, req *tmuxproto.ListSavedLayoutsRequest) (*tmuxproto.ListSavedLayoutsResponse, error) {
+	resp := &tmuxproto.ListSavedLayoutsResponse{Layouts: map[string]*tmuxproto.LayoutProfile{}}
+	for name, ls := range s.layoutStore {
+		converted := make([]*tmuxproto.WindowLayout, len(ls))
+		for i := range ls {
+			converted[i] = &tmuxproto.WindowLayout{Window: ls[i].Window, Layout: ls[i].Layout}
+		}
+		resp.Layouts[name] = &tmuxproto.LayoutProfile{Layouts: converted}
+	}
+	return resp, nil
 }
 
 func (s *Service) NewSession(ctx context.Context, req *tmuxproto.NewSessionRequest) (*tmuxproto.NewSessionResponse, error) {

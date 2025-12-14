@@ -51,5 +51,6 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 - Paging hints: capture responses include `truncated` + `requested_lines`; snapshot includes `capture_truncated` to signal when to fetch more history.
 - State: `State` aggregates captures across targets plus list outputs, with truncation/requested-lines metadata.
 - Defaults helpers: `SetDefault` persists across restarts via `$MCP_TMUX_DEFAULTS_FILE`; `ListDefaults` reports the active/default target; `ValidateHost` shows whether a host profile is available and its defaults.
+- Layout profiles: `SaveLayout` persists layouts to `$MCP_TMUX_LAYOUTS_FILE`; `ListSavedLayouts` returns saved layouts for reuse.
 
 Notes: StreamPane still uses `capture-pane` polling; swapping to `pipe-pane` tailing would provide near-real-time streaming. Auth/z-audit still to be added to mirror the Node MCP server.

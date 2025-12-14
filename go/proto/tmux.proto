@@ -181,6 +181,23 @@ message RestoreLayoutRequest {
 
 message RestoreLayoutResponse { string text = 1; }
 
+message SaveLayoutRequest {
+  string name = 1;
+  repeated WindowLayout layouts = 2;
+}
+
+message SaveLayoutResponse { string text = 1; }
+
+message ListSavedLayoutsRequest {}
+
+message ListSavedLayoutsResponse {
+  map<string, LayoutProfile> layouts = 1;
+}
+
+message LayoutProfile {
+  repeated WindowLayout layouts = 1;
+}
+
 message NewSessionRequest {
   PaneRef target = 1;          // session and host used; window/pane ignored
   bool attach = 2;             // attach after create
@@ -232,6 +249,8 @@ service TmuxService {
   rpc TailPane(TailPaneRequest) returns (stream TailChunk);
   rpc CaptureLayout(CaptureLayoutRequest) returns (CaptureLayoutResponse);
   rpc RestoreLayout(RestoreLayoutRequest) returns (RestoreLayoutResponse);
+  rpc SaveLayout(SaveLayoutRequest) returns (SaveLayoutResponse);
+  rpc ListSavedLayouts(ListSavedLayoutsRequest) returns (ListSavedLayoutsResponse);
   rpc NewSession(NewSessionRequest) returns (NewSessionResponse);
   rpc NewWindow(NewWindowRequest) returns (NewWindowResponse);
   rpc ServerInfo(ServerInfoRequest) returns (ServerInfoResponse);
