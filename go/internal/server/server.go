@@ -98,11 +98,19 @@ type hostProfile struct {
 	DefaultPane    string   `json:"defaultPane"`
 }
 
+type defaultTargetStore struct {
+	Host    string `json:"host"`
+	Session string `json:"session"`
+	Window  string `json:"window"`
+	Pane    string `json:"pane"`
+}
+
 type Service struct {
 	tmuxBin       string
 	pathAdd       []string
 	meta          RunMeta
 	hostProfiles  map[string]hostProfile
+	defaultsPath  string
 	defaultTarget *tmuxproto.PaneRef
 	run           func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
 	tmuxproto.UnimplementedTmuxServiceServer
@@ -118,10 +126,13 @@ func NewService(tmuxBin string, pathAdd []string) *Service {
 
 func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error), meta RunMeta) *Service {
 	hp := loadHostProfiles()
+	defPath, defTarget := loadDefaultTarget()
 	return &Service{
-		tmuxBin:      tmuxBin,
-		pathAdd:      pathAdd,
-		hostProfiles: hp,
+		tmuxBin:       tmuxBin,
+		pathAdd:       pathAdd,
+		hostProfiles:  hp,
+		defaultsPath:  defPath,
+		defaultTarget: defTarget,
 		meta: RunMeta{
 			PackageName: meta.PackageName,
 			Version:     meta.Version,
@@ -166,6 +177,47 @@ func loadHostProfiles() map[string]hostProfile {
 		return map[string]hostProfile{}
 	}
 	return profiles
+}
+
+func loadDefaultTarget() (string, *tmuxproto.PaneRef) {
+	path := os.Getenv("MCP_TMUX_DEFAULTS_FILE")
+	if path == "" {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, ".config", "mcp-tmux", "defaults.json")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return path, nil
+	}
+	var store defaultTargetStore
+	if err := json.Unmarshal(data, &store); err != nil {
+		return path, nil
+	}
+	if store.Session == "" && store.Pane == "" && store.Window == "" && store.Host == "" {
+		return path, nil
+	}
+	return path, &tmuxproto.PaneRef{
+		Host:    store.Host,
+		Session: store.Session,
+		Window:  store.Window,
+		Pane:    store.Pane,
+	}
+}
+
+func persistDefaultTarget(path string, target *tmuxproto.PaneRef) {
+	if path == "" || target == nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	store := defaultTargetStore{
+		Host:    target.Host,
+		Session: target.Session,
+		Window:  target.Window,
+		Pane:    target.Pane,
+	}
+	if data, err := json.MarshalIndent(store, "", "  "); err == nil {
+		_ = os.WriteFile(path, data, 0o644)
+	}
 }
 
 func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.TmuxService_StreamPaneServer) error {
@@ -656,6 +708,7 @@ func (s *Service) SetDefault(ctx context.Context, req *tmuxproto.SetDefaultReque
 		return nil, err
 	}
 	s.defaultTarget = target
+	persistDefaultTarget(s.defaultsPath, target)
 	msg := fmt.Sprintf("Defaults set host=%s session=%s window=%s pane=%s", target.Host, target.Session, target.Window, target.Pane)
 	return &tmuxproto.SetDefaultResponse{Text: msg}, nil
 }

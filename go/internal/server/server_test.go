@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -217,6 +218,23 @@ func TestTailPanePolls(t *testing.T) {
 	}
 	if len(stream.msgs) == 0 {
 		t.Fatalf("expected chunks")
+	}
+}
+
+func TestDefaultPersistence(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "defaults.json")
+	t.Setenv("MCP_TMUX_DEFAULTS_FILE", path)
+	svc := NewServiceWithRunner("tmux", nil, (&fakeRunner{}).run, RunMeta{})
+	_, err := svc.SetDefault(context.Background(), &tmuxproto.SetDefaultRequest{
+		Target: &tmuxproto.PaneRef{Host: "h", Session: "s", Pane: "s.1"},
+	})
+	if err != nil {
+		t.Fatalf("SetDefault error: %v", err)
+	}
+	svc2 := NewServiceWithRunner("tmux", nil, (&fakeRunner{}).run, RunMeta{})
+	if svc2.defaultTarget == nil || svc2.defaultTarget.Session != "s" {
+		t.Fatalf("expected default to load from disk")
 	}
 }
 
