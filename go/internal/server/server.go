@@ -388,6 +388,13 @@ func (s *Service) TailPane(req *tmuxproto.TailPaneRequest, stream tmuxproto.Tmux
 	if maxBytes == 0 {
 		maxBytes = 8192
 	}
+	interval := 1 * time.Second
+	if req.PollMillis > 0 {
+		interval = time.Duration(req.PollMillis) * time.Millisecond
+		if interval < 50*time.Millisecond {
+			interval = 50 * time.Millisecond
+		}
+	}
 	seq := uint64(0)
 	send := func(data []byte, heartbeat bool, eof bool, reason string) error {
 		seq++

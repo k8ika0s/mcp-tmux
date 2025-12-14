@@ -149,6 +149,7 @@ message TailPaneRequest {
   uint32 lines = 2;            // chunk size per poll
   bool strip_ansi = 3;
   uint32 max_bytes = 4;        // chunk size limit
+  uint32 poll_millis = 5;      // optional poll override
 }
 
 message TailChunk {

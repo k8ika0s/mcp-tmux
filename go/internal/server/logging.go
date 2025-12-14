@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -22,10 +23,11 @@ const (
 
 type auditConfig struct {
 	color bool
+	json  bool
 }
 
-func AuditOptions(color bool) []grpc.ServerOption {
-	cfg := auditConfig{color: color}
+func AuditOptions(color bool, jsonOut bool) []grpc.ServerOption {
+	cfg := auditConfig{color: color, json: jsonOut}
 	return []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(cfg.unaryAudit()),
 		grpc.ChainStreamInterceptor(cfg.streamAudit()),
@@ -65,9 +67,24 @@ func (a auditConfig) log(method string, req interface{}, start time.Time, err er
 			statusText = grpcStatus(err)
 		}
 	}
-	extra := ""
-	if args := argsSummary(req); args != "" {
-		extra = " " + args
+	args := argsSummary(req)
+	if a.json {
+		entry := map[string]interface{}{
+			"ts":     time.Now().Format(time.RFC3339),
+			"method": method,
+			"target": target,
+			"status": statusText,
+			"dur_ms": dur.Milliseconds(),
+			"args":   args,
+			"stream": stream,
+		}
+		if err != nil {
+			entry["error"] = err.Error()
+		}
+		if data, e := json.Marshal(entry); e == nil {
+			log.Print(string(data))
+			return
+		}
 	}
 	msg := fmt.Sprintf("%s %s (%s) %s%s%s%s",
 		time.Now().Format(time.RFC3339),
@@ -76,7 +93,7 @@ func (a auditConfig) log(method string, req interface{}, start time.Time, err er
 		a.wrap(statusColor, statusText),
 		a.wrap(colorGray, fmt.Sprintf(" %v", dur)),
 		colorReset,
-		extra,
+		args,
 	)
 	log.Print(msg)
 }
@@ -113,6 +130,10 @@ func argsSummary(req interface{}) string {
 		return fmt.Sprintf(" runs=%d", len(v.Steps))
 	case *tmuxproto.BatchCaptureRequest:
 		return fmt.Sprintf(" captures=%d", len(v.Requests))
+	case *tmuxproto.TailPaneRequest:
+		return fmt.Sprintf(" tail lines=%d", v.Lines)
+	case *tmuxproto.StateRequest:
+		return fmt.Sprintf(" state captures=%d", len(v.Targets))
 	}
 	return ""
 }

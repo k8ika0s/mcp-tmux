@@ -28,6 +28,7 @@ func main() {
 	authToken := flag.String("auth-token", "", "optional bearer/token required on incoming calls (authorization or x-mcp-token)")
 	logFile := flag.String("log-file", "", "optional path to append audit logs")
 	logColor := flag.Bool("log-color", true, "colorize audit logs")
+	logJSON := flag.Bool("log-json", false, "emit audit logs as JSON (overrides color output)")
 	flag.Parse()
 
 	lis, err := net.Listen("tcp", *addr)
@@ -45,7 +46,7 @@ func main() {
 
 	opts := []grpc.ServerOption{}
 	opts = append(opts, server.AuthOptions(*authToken)...)
-	opts = append(opts, server.AuditOptions(*logColor)...)
+	opts = append(opts, server.AuditOptions(*logColor, *logJSON)...)
 	grpcServer := grpc.NewServer(opts...)
 	meta := server.RunMeta{
 		PackageName: *pkgName,
