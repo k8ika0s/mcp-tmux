@@ -15,19 +15,27 @@ import (
 
 const (
 	defaultCaptureLines = 200
-	heartbeatInterval   = 5 * time.Second
-	pollInterval        = 1 * time.Second
+)
+
+var (
+	heartbeatInterval = 5 * time.Second
+	pollInterval      = 1 * time.Second
 )
 
 // Service implements tmuxproto.TmuxServiceServer.
 type Service struct {
 	tmuxBin string
 	pathAdd []string
+	run     func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
 	tmuxproto.UnimplementedTmuxServiceServer
 }
 
 func NewService(tmuxBin string, pathAdd []string) *Service {
-	return &Service{tmuxBin: tmuxBin, pathAdd: pathAdd}
+	return NewServiceWithRunner(tmuxBin, pathAdd, tmux.Run)
+}
+
+func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)) *Service {
+	return &Service{tmuxBin: tmuxBin, pathAdd: pathAdd, run: runner}
 }
 
 func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.TmuxService_StreamPaneServer) error {
@@ -70,7 +78,7 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, captureArgs)
+			out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, captureArgs)
 			if err != nil {
 				return status.Errorf(codes.Internal, "capture failed: %v", err)
 			}
@@ -115,11 +123,11 @@ func (s *Service) Snapshot(ctx context.Context, req *tmuxproto.SnapshotRequest) 
 		captureLines = defaultCaptureLines
 	}
 
-	sessions, _ := tmux.Run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-sessions"})
-	windows, _ := tmux.Run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-windows"})
-	panes, _ := tmux.Run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-panes"})
+	sessions, _ := s.run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-sessions"})
+	windows, _ := s.run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-windows"})
+	panes, _ := s.run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-panes"})
 	captureArgs := []string{"capture-pane", "-pJ", "-S", fmt.Sprintf("-%d", captureLines)}
-	capture, _ := tmux.Run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, captureArgs)
+	capture, _ := s.run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, captureArgs)
 
 	return &tmuxproto.SnapshotResponse{Sessions: sessions, Windows: windows, Panes: panes, Capture: capture}, nil
 }
@@ -134,7 +142,7 @@ func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneReq
 		lines = defaultCaptureLines
 	}
 	args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", lines)}
-	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "capture failed: %v", err)
 	}
@@ -156,7 +164,7 @@ func (s *Service) RunCommand(ctx context.Context, req *tmuxproto.RunCommandReque
 	if len(req.Args) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "args are required")
 	}
-	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, req.Args)
+	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, req.Args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tmux %v failed: %v", req.Args, err)
 	}
@@ -179,7 +187,7 @@ func (s *Service) SendKeys(ctx context.Context, req *tmuxproto.SendKeysRequest) 
 	if req.Enter {
 		args = append(args, "Enter")
 	}
-	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "send-keys failed: %v", err)
 	}
@@ -204,10 +212,10 @@ func (s *Service) RunBatch(ctx context.Context, req *tmuxproto.RunBatchRequest) 
 	cmd := strings.Join(req.Steps, fmt.Sprintf(" %s ", joiner))
 
 	if req.CleanPrompt {
-		_, _ = tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"send-keys", "-t", pane, "C-c", "C-u"})
+		_, _ = s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"send-keys", "-t", pane, "C-c", "C-u"})
 	}
 
-	_, err = tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"send-keys", "-t", pane, cmd, "Enter"})
+	_, err = s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"send-keys", "-t", pane, cmd, "Enter"})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "run batch failed: %v", err)
 	}
@@ -216,7 +224,7 @@ func (s *Service) RunBatch(ctx context.Context, req *tmuxproto.RunBatchRequest) 
 	if req.CaptureLines > 0 {
 		captureLines := req.CaptureLines
 		args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", captureLines)}
-		capOut, capErr := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+		capOut, capErr := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
 		if capErr == nil {
 			if req.StripAnsi {
 				capOut = stripANSI(capOut)
@@ -245,7 +253,7 @@ func (s *Service) MultiRun(ctx context.Context, req *tmuxproto.MultiRunRequest) 
 			results = append(results, &tmuxproto.MultiRunResult{Target: target, Error: "args are required"})
 			continue
 		}
-		out, runErr := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, step.Args)
+		out, runErr := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, step.Args)
 		if runErr != nil {
 			results = append(results, &tmuxproto.MultiRunResult{Target: target, Error: runErr.Error()})
 			continue
@@ -263,7 +271,7 @@ func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) 
 	if err != nil {
 		return nil, err
 	}
-	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"list-sessions"})
+	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"list-sessions"})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -279,7 +287,7 @@ func (s *Service) ListWindows(ctx context.Context, req *tmuxproto.ListRequest) (
 	if target.Session != "" {
 		args = append(args, "-t", target.Session)
 	}
-	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -295,7 +303,7 @@ func (s *Service) ListPanes(ctx context.Context, req *tmuxproto.ListRequest) (*t
 	if target.Session != "" {
 		args = append(args, "-t", target.Session)
 	}
-	out, err := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -311,7 +319,7 @@ func (s *Service) SetDefault(ctx context.Context, req *tmuxproto.SetDefaultReque
 	return &tmuxproto.SetDefaultResponse{Text: msg}, nil
 }
 
-var ansiRegex = regexp.MustCompile(`[\u001B\u009B][[\]()#;?]*(?:(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~])`)
+var ansiRegex = regexp.MustCompile(`[\x1B\x9B][[\]()#;?]*(?:(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~])`)
 
 func stripANSI(s string) string {
 	return ansiRegex.ReplaceAllString(s, "")
