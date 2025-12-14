@@ -199,6 +199,27 @@ func TestBatchCapture(t *testing.T) {
 	}
 }
 
+func TestTailPanePolls(t *testing.T) {
+	prevPoll := pollInterval
+	pollInterval = 10 * time.Millisecond
+	defer func() { pollInterval = prevPoll }()
+
+	r := &fakeRunner{outputs: []string{"line1", "line1\nline2"}}
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &stubTailStream{ctx: ctx, cancel: cancel}
+	err := svc.TailPane(&tmuxproto.TailPaneRequest{
+		Target: &tmuxproto.PaneRef{Session: "s"},
+		Lines:  2,
+	}, stream)
+	if err != nil {
+		t.Fatalf("TailPane error: %v", err)
+	}
+	if len(stream.msgs) == 0 {
+		t.Fatalf("expected chunks")
+	}
+}
+
 func TestMultiRunAggregates(t *testing.T) {
 	r := &fakeRunner{outputs: []string{"ok"}}
 	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
@@ -295,6 +316,27 @@ func (*stubStream) SendHeader(metadata.MD) error { return nil }
 func (*stubStream) SetTrailer(metadata.MD)       {}
 func (*stubStream) SendMsg(m interface{}) error  { _ = m; return nil }
 func (*stubStream) RecvMsg(m interface{}) error  { _ = m; return nil }
+
+type stubTailStream struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	msgs   []*tmuxproto.TailChunk
+}
+
+func (s *stubTailStream) Send(chunk *tmuxproto.TailChunk) error {
+	s.msgs = append(s.msgs, chunk)
+	if len(s.msgs) >= 2 && s.cancel != nil {
+		s.cancel()
+	}
+	return nil
+}
+
+func (s *stubTailStream) Context() context.Context   { return s.ctx }
+func (*stubTailStream) SetHeader(metadata.MD) error  { return nil }
+func (*stubTailStream) SendHeader(metadata.MD) error { return nil }
+func (*stubTailStream) SetTrailer(metadata.MD)       {}
+func (*stubTailStream) SendMsg(m interface{}) error  { _ = m; return nil }
+func (*stubTailStream) RecvMsg(m interface{}) error  { _ = m; return nil }
 
 func TestStreamPaneDelta(t *testing.T) {
 	prevPoll, prevHeartbeat := pollInterval, heartbeatInterval

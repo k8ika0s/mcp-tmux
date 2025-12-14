@@ -38,6 +38,59 @@ type RunMeta struct {
 	RepoURL     string
 }
 
+func (s *Service) State(ctx context.Context, req *tmuxproto.StateRequest) (*tmuxproto.StateResponse, error) {
+	captureLines := req.CaptureLines
+	if captureLines == 0 {
+		captureLines = defaultCaptureLines
+	}
+	captures := []*tmuxproto.PaneCapture{}
+
+	targets := req.Targets
+	if len(targets) == 0 && s.defaultTarget != nil {
+		targets = []*tmuxproto.PaneRef{s.defaultTarget}
+	}
+	for _, t := range targets {
+		if t == nil {
+			continue
+		}
+		resolved, pane, err := s.resolvePaneTarget(t)
+		if err != nil {
+			continue
+		}
+		args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", captureLines)}
+		cap, err := s.runTmux(ctx, resolved.Host, args)
+		if err != nil {
+			continue
+		}
+		if req.StripAnsi {
+			cap = stripANSI(cap)
+		}
+		trunc := strings.Count(cap, "\n")+1 >= int(captureLines)
+		capt := &tmuxproto.PaneCapture{
+			Target:         resolved,
+			Text:           cap,
+			Truncated:      trunc,
+			RequestedLines: uint32(captureLines),
+		}
+		captures = append(captures, capt)
+	}
+
+	host := ""
+	if len(captures) > 0 {
+		host = captures[0].Target.GetHost()
+	}
+	sessions, _ := s.runTmux(ctx, host, []string{"list-sessions"})
+	windows, _ := s.runTmux(ctx, host, []string{"list-windows"})
+	panes, _ := s.runTmux(ctx, host, []string{"list-panes"})
+
+	return &tmuxproto.StateResponse{
+		Captures: captures,
+		Sessions: sessions,
+		Windows:  windows,
+		Panes:    panes,
+	}, nil
+}
+
 type hostProfile struct {
 	PathAdd        []string `json:"pathAdd"`
 	TmuxBin        string   `json:"tmuxBin"`
@@ -224,7 +277,7 @@ func (s *Service) Snapshot(ctx context.Context, req *tmuxproto.SnapshotRequest) 
 		trunc = true
 	}
 
-	return &tmuxproto.SnapshotResponse{Sessions: sessions, Windows: windows, Panes: panes, Capture: capture, CaptureTruncated: trunc}, nil
+	return &tmuxproto.SnapshotResponse{Sessions: sessions, Windows: windows, Panes: panes, Capture: capture, CaptureTruncated: trunc, CaptureRequestedLines: uint32(captureLines)}, nil
 }
 
 func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneRequest) (*tmuxproto.CapturePaneResponse, error) {
@@ -268,6 +321,75 @@ func (s *Service) BatchCapture(ctx context.Context, req *tmuxproto.BatchCaptureR
 		caps = append(caps, capResp)
 	}
 	return &tmuxproto.BatchCaptureResponse{Captures: caps}, nil
+}
+
+func (s *Service) TailPane(req *tmuxproto.TailPaneRequest, stream tmuxproto.TmuxService_TailPaneServer) error {
+	target, pane, err := s.resolvePaneTarget(req.GetTarget())
+	if err != nil {
+		return err
+	}
+	lines := req.Lines
+	if lines == 0 {
+		lines = 20
+	}
+	maxBytes := req.MaxBytes
+	if maxBytes == 0 {
+		maxBytes = 8192
+	}
+	seq := uint64(0)
+	send := func(data []byte, heartbeat bool, eof bool, reason string) error {
+		seq++
+		return stream.Send(&tmuxproto.TailChunk{
+			Target:       target,
+			Seq:          seq,
+			TsUnixMillis: time.Now().UnixMilli(),
+			Data:         data,
+			Heartbeat:    heartbeat,
+			Eof:          eof,
+			Reason:       reason,
+		})
+	}
+
+	ctx := stream.Context()
+	poll := time.NewTicker(1 * time.Second)
+	defer poll.Stop()
+	last := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-poll.C:
+			args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", lines), "-N", fmt.Sprintf("%d", lines)}
+			out, err := s.runTmux(ctx, target.Host, args)
+			if err != nil {
+				return status.Errorf(codes.Internal, "tail failed: %v", err)
+			}
+			if req.StripAnsi {
+				out = stripANSI(out)
+			}
+			if out != last {
+				diff := out
+				if strings.HasPrefix(out, last) {
+					diff = out[len(last):]
+				}
+				for len(diff) > 0 {
+					chunk := diff
+					if len(chunk) > int(maxBytes) {
+						chunk = diff[:maxBytes]
+						diff = diff[maxBytes:]
+					} else {
+						diff = ""
+					}
+					if err := send([]byte(chunk), false, false, ""); err != nil {
+						return err
+					}
+				}
+				last = out
+			} else {
+				_ = send(nil, true, false, "")
+			}
+		}
+	}
 }
 
 func (s *Service) RunCommand(ctx context.Context, req *tmuxproto.RunCommandRequest) (*tmuxproto.RunCommandResponse, error) {

@@ -41,6 +41,27 @@ message SnapshotResponse {
   string panes = 3;
   string capture = 4;
   bool capture_truncated = 5;
+  uint32 capture_requested_lines = 6;
+}
+
+message PaneCapture {
+  PaneRef target = 1;
+  string text = 2;
+  bool truncated = 3;
+  uint32 requested_lines = 4;
+}
+
+message StateRequest {
+  repeated PaneRef targets = 1; // if empty, uses defaults/host profile
+  uint32 capture_lines = 2;
+  bool strip_ansi = 3;
+}
+
+message StateResponse {
+  repeated PaneCapture captures = 1;
+  string sessions = 2;
+  string windows = 3;
+  string panes = 4;
 }
 
 message ListRequest { PaneRef target = 1; }
@@ -123,6 +144,23 @@ message MultiRunResponse {
   repeated MultiRunResult results = 1;
 }
 
+message TailPaneRequest {
+  PaneRef target = 1;
+  uint32 lines = 2;            // chunk size per poll
+  bool strip_ansi = 3;
+  uint32 max_bytes = 4;        // chunk size limit
+}
+
+message TailChunk {
+  PaneRef target = 1;
+  uint64 seq = 2;
+  int64 ts_unix_millis = 3;
+  bytes data = 4;
+  bool heartbeat = 5;
+  bool eof = 6;
+  string reason = 7;
+}
+
 message CaptureLayoutRequest { PaneRef target = 1; }
 
 message WindowLayout {
@@ -174,6 +212,7 @@ service TmuxService {
   rpc RunBatch(RunBatchRequest) returns (RunBatchResponse);
   rpc MultiRun(MultiRunRequest) returns (MultiRunResponse);
   rpc BatchCapture(BatchCaptureRequest) returns (BatchCaptureResponse);
+  rpc TailPane(TailPaneRequest) returns (stream TailChunk);
   rpc CaptureLayout(CaptureLayoutRequest) returns (CaptureLayoutResponse);
   rpc RestoreLayout(RestoreLayoutRequest) returns (RestoreLayoutResponse);
   rpc NewSession(NewSessionRequest) returns (NewSessionResponse);

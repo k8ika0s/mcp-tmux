@@ -48,5 +48,6 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 - Host profiles: optional JSON at `$MCP_TMUX_HOSTS_FILE` (default `~/.config/mcp-tmux/hosts.json`) with per-host `tmuxBin`, `pathAdd`, and default session/pane.
 - Logging: `--log-file` to tee audit logs to disk; `--log-color` to toggle ANSI colors.
 - Paging hints: capture responses include `truncated` + `requested_lines`; snapshot includes `capture_truncated` to signal when to fetch more history.
+- State: `State` aggregates captures across targets plus list outputs, with truncation/requested-lines metadata.
 
 Notes: StreamPane still uses `capture-pane` polling; swapping to `pipe-pane` tailing would provide near-real-time streaming. Auth/z-audit still to be added to mirror the Node MCP server.

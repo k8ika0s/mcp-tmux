@@ -27,6 +27,7 @@ const (
 	TmuxService_RunBatch_FullMethodName      = "/mcp.tmux.v1.TmuxService/RunBatch"
 	TmuxService_MultiRun_FullMethodName      = "/mcp.tmux.v1.TmuxService/MultiRun"
 	TmuxService_BatchCapture_FullMethodName  = "/mcp.tmux.v1.TmuxService/BatchCapture"
+	TmuxService_TailPane_FullMethodName      = "/mcp.tmux.v1.TmuxService/TailPane"
 	TmuxService_CaptureLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/CaptureLayout"
 	TmuxService_RestoreLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/RestoreLayout"
 	TmuxService_NewSession_FullMethodName    = "/mcp.tmux.v1.TmuxService/NewSession"
@@ -50,6 +51,7 @@ type TmuxServiceClient interface {
 	RunBatch(ctx context.Context, in *RunBatchRequest, opts ...grpc.CallOption) (*RunBatchResponse, error)
 	MultiRun(ctx context.Context, in *MultiRunRequest, opts ...grpc.CallOption) (*MultiRunResponse, error)
 	BatchCapture(ctx context.Context, in *BatchCaptureRequest, opts ...grpc.CallOption) (*BatchCaptureResponse, error)
+	TailPane(ctx context.Context, in *TailPaneRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailChunk], error)
 	CaptureLayout(ctx context.Context, in *CaptureLayoutRequest, opts ...grpc.CallOption) (*CaptureLayoutResponse, error)
 	RestoreLayout(ctx context.Context, in *RestoreLayoutRequest, opts ...grpc.CallOption) (*RestoreLayoutResponse, error)
 	NewSession(ctx context.Context, in *NewSessionRequest, opts ...grpc.CallOption) (*NewSessionResponse, error)
@@ -158,6 +160,25 @@ func (c *tmuxServiceClient) BatchCapture(ctx context.Context, in *BatchCaptureRe
 	return out, nil
 }
 
+func (c *tmuxServiceClient) TailPane(ctx context.Context, in *TailPaneRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TailChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &TmuxService_ServiceDesc.Streams[1], TmuxService_TailPane_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[TailPaneRequest, TailChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type TmuxService_TailPaneClient = grpc.ServerStreamingClient[TailChunk]
+
 func (c *tmuxServiceClient) CaptureLayout(ctx context.Context, in *CaptureLayoutRequest, opts ...grpc.CallOption) (*CaptureLayoutResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CaptureLayoutResponse)
@@ -260,6 +281,7 @@ type TmuxServiceServer interface {
 	RunBatch(context.Context, *RunBatchRequest) (*RunBatchResponse, error)
 	MultiRun(context.Context, *MultiRunRequest) (*MultiRunResponse, error)
 	BatchCapture(context.Context, *BatchCaptureRequest) (*BatchCaptureResponse, error)
+	TailPane(*TailPaneRequest, grpc.ServerStreamingServer[TailChunk]) error
 	CaptureLayout(context.Context, *CaptureLayoutRequest) (*CaptureLayoutResponse, error)
 	RestoreLayout(context.Context, *RestoreLayoutRequest) (*RestoreLayoutResponse, error)
 	NewSession(context.Context, *NewSessionRequest) (*NewSessionResponse, error)
@@ -302,6 +324,9 @@ func (UnimplementedTmuxServiceServer) MultiRun(context.Context, *MultiRunRequest
 }
 func (UnimplementedTmuxServiceServer) BatchCapture(context.Context, *BatchCaptureRequest) (*BatchCaptureResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BatchCapture not implemented")
+}
+func (UnimplementedTmuxServiceServer) TailPane(*TailPaneRequest, grpc.ServerStreamingServer[TailChunk]) error {
+	return status.Errorf(codes.Unimplemented, "method TailPane not implemented")
 }
 func (UnimplementedTmuxServiceServer) CaptureLayout(context.Context, *CaptureLayoutRequest) (*CaptureLayoutResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CaptureLayout not implemented")
@@ -487,6 +512,17 @@ func _TmuxService_BatchCapture_Handler(srv interface{}, ctx context.Context, dec
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _TmuxService_TailPane_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(TailPaneRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(TmuxServiceServer).TailPane(m, &grpc.GenericServerStream[TailPaneRequest, TailChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type TmuxService_TailPaneServer = grpc.ServerStreamingServer[TailChunk]
 
 func _TmuxService_CaptureLayout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CaptureLayoutRequest)
@@ -726,6 +762,11 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamPane",
 			Handler:       _TmuxService_StreamPane_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "TailPane",
+			Handler:       _TmuxService_TailPane_Handler,
 			ServerStreams: true,
 		},
 	},

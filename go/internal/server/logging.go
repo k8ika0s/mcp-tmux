@@ -65,15 +65,18 @@ func (a auditConfig) log(method string, req interface{}, start time.Time, err er
 			statusText = grpcStatus(err)
 		}
 	}
-	msg := fmt.Sprintf("%s %s (%s) %s%s%s %s%s",
+	extra := ""
+	if args := argsSummary(req); args != "" {
+		extra = " " + args
+	}
+	msg := fmt.Sprintf("%s %s (%s) %s%s%s%s",
 		time.Now().Format(time.RFC3339),
 		method,
 		target,
 		a.wrap(statusColor, statusText),
 		a.wrap(colorGray, fmt.Sprintf(" %v", dur)),
 		colorReset,
-		"",
-		"",
+		extra,
 	)
 	log.Print(msg)
 }
@@ -98,6 +101,20 @@ func targetSummary(req interface{}) string {
 		return fmt.Sprintf("host=%s session=%s window=%s pane=%s", emptyDash(t.Host), emptyDash(t.Session), emptyDash(t.Window), emptyDash(t.Pane))
 	}
 	return "-"
+}
+
+func argsSummary(req interface{}) string {
+	switch v := req.(type) {
+	case *tmuxproto.RunCommandRequest:
+		return fmt.Sprintf(" args=%v", v.Args)
+	case *tmuxproto.RunBatchRequest:
+		return fmt.Sprintf(" steps=%d", len(v.Steps))
+	case *tmuxproto.MultiRunRequest:
+		return fmt.Sprintf(" runs=%d", len(v.Steps))
+	case *tmuxproto.BatchCaptureRequest:
+		return fmt.Sprintf(" captures=%d", len(v.Requests))
+	}
+	return ""
 }
 
 func grpcStatus(err error) string {
