@@ -33,6 +33,7 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 - `RunCommand`: run arbitrary tmux subcommands (raw args) on a host.
 - `SendKeys`: send keys (and optionally Enter) to a pane.
 - `RunBatch`: join multiple shell steps (default `&&`), optional prompt clean (C-c/C-u), and optional capture after run.
+- `MultiRun`: fan out raw tmux commands across multiple targets and aggregate results (with optional ANSI stripping).
 - `Snapshot` / `ListSessions` / `ListWindows` / `ListPanes` / `SetDefault`: basic inventory helpers.
 
 Notes: StreamPane still uses `capture-pane` polling; swapping to `pipe-pane` tailing would provide near-real-time streaming. Auth/z-audit still to be added to mirror the Node MCP server.

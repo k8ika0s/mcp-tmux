@@ -25,6 +25,7 @@ const (
 	TmuxService_RunCommand_FullMethodName   = "/mcp.tmux.v1.TmuxService/RunCommand"
 	TmuxService_SendKeys_FullMethodName     = "/mcp.tmux.v1.TmuxService/SendKeys"
 	TmuxService_RunBatch_FullMethodName     = "/mcp.tmux.v1.TmuxService/RunBatch"
+	TmuxService_MultiRun_FullMethodName     = "/mcp.tmux.v1.TmuxService/MultiRun"
 	TmuxService_ListSessions_FullMethodName = "/mcp.tmux.v1.TmuxService/ListSessions"
 	TmuxService_ListWindows_FullMethodName  = "/mcp.tmux.v1.TmuxService/ListWindows"
 	TmuxService_ListPanes_FullMethodName    = "/mcp.tmux.v1.TmuxService/ListPanes"
@@ -41,6 +42,7 @@ type TmuxServiceClient interface {
 	RunCommand(ctx context.Context, in *RunCommandRequest, opts ...grpc.CallOption) (*RunCommandResponse, error)
 	SendKeys(ctx context.Context, in *SendKeysRequest, opts ...grpc.CallOption) (*SendKeysResponse, error)
 	RunBatch(ctx context.Context, in *RunBatchRequest, opts ...grpc.CallOption) (*RunBatchResponse, error)
+	MultiRun(ctx context.Context, in *MultiRunRequest, opts ...grpc.CallOption) (*MultiRunResponse, error)
 	ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListWindows(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListPanes(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
@@ -124,6 +126,16 @@ func (c *tmuxServiceClient) RunBatch(ctx context.Context, in *RunBatchRequest, o
 	return out, nil
 }
 
+func (c *tmuxServiceClient) MultiRun(ctx context.Context, in *MultiRunRequest, opts ...grpc.CallOption) (*MultiRunResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MultiRunResponse)
+	err := c.cc.Invoke(ctx, TmuxService_MultiRun_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tmuxServiceClient) ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListResponse)
@@ -174,6 +186,7 @@ type TmuxServiceServer interface {
 	RunCommand(context.Context, *RunCommandRequest) (*RunCommandResponse, error)
 	SendKeys(context.Context, *SendKeysRequest) (*SendKeysResponse, error)
 	RunBatch(context.Context, *RunBatchRequest) (*RunBatchResponse, error)
+	MultiRun(context.Context, *MultiRunRequest) (*MultiRunResponse, error)
 	ListSessions(context.Context, *ListRequest) (*ListResponse, error)
 	ListWindows(context.Context, *ListRequest) (*ListResponse, error)
 	ListPanes(context.Context, *ListRequest) (*ListResponse, error)
@@ -205,6 +218,9 @@ func (UnimplementedTmuxServiceServer) SendKeys(context.Context, *SendKeysRequest
 }
 func (UnimplementedTmuxServiceServer) RunBatch(context.Context, *RunBatchRequest) (*RunBatchResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunBatch not implemented")
+}
+func (UnimplementedTmuxServiceServer) MultiRun(context.Context, *MultiRunRequest) (*MultiRunResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MultiRun not implemented")
 }
 func (UnimplementedTmuxServiceServer) ListSessions(context.Context, *ListRequest) (*ListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSessions not implemented")
@@ -340,6 +356,24 @@ func _TmuxService_RunBatch_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TmuxService_MultiRun_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MultiRunRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).MultiRun(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_MultiRun_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).MultiRun(ctx, req.(*MultiRunRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TmuxService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListRequest)
 	if err := dec(in); err != nil {
@@ -438,6 +472,10 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunBatch",
 			Handler:    _TmuxService_RunBatch_Handler,
+		},
+		{
+			MethodName: "MultiRun",
+			Handler:    _TmuxService_MultiRun_Handler,
 		},
 		{
 			MethodName: "ListSessions",

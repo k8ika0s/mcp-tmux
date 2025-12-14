@@ -5,37 +5,37 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
 
 // BuildPath merges PATH additions without duplicates.
 func BuildPath(current string, additions []string) string {
+	seen := map[string]bool{}
 	parts := []string{}
 	if current != "" {
-		parts = append(parts, strings.Split(current, ":")...)
+		for _, p := range strings.Split(current, ":") {
+			if p == "" || seen[p] {
+				continue
+			}
+			seen[p] = true
+			parts = append(parts, p)
+		}
 	}
 	for _, a := range additions {
-		if a == "" {
+		if a == "" || seen[a] {
 			continue
 		}
-		found := false
-		for _, p := range parts {
-			if p == a {
-				found = true
-				break
-			}
-		}
-		if !found {
-			parts = append(parts, a)
-		}
+		seen[a] = true
+		parts = append(parts, a)
 	}
 	return strings.Join(parts, ":")
 }
 
 // Run executes tmux locally or via ssh with a base64-wrapped command to protect format strings.
 func Run(ctx context.Context, host string, tmuxBin string, pathAdd []string, args []string) (string, error) {
-	basePath := BuildPath("", pathAdd)
+	basePath := BuildPath(os.Getenv("PATH"), pathAdd)
 	quotedArgs := make([]string, 0, len(args)+2)
 	quotedArgs = append(quotedArgs, tmuxBin)
 	for _, a := range args {

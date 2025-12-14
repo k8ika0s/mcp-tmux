@@ -89,6 +89,26 @@ message RunBatchResponse {
   bool truncated = 3;
 }
 
+message MultiRunRequest {
+  repeated MultiRunStep steps = 1;
+  bool strip_ansi = 2;
+}
+
+message MultiRunStep {
+  PaneRef target = 1;
+  repeated string args = 2;
+}
+
+message MultiRunResult {
+  PaneRef target = 1;
+  string text = 2;
+  string error = 3;
+}
+
+message MultiRunResponse {
+  repeated MultiRunResult results = 1;
+}
+
 service TmuxService {
   rpc StreamPane(StreamPaneRequest) returns (stream PaneChunk);
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
@@ -96,6 +116,7 @@ service TmuxService {
   rpc RunCommand(RunCommandRequest) returns (RunCommandResponse);
   rpc SendKeys(SendKeysRequest) returns (SendKeysResponse);
   rpc RunBatch(RunBatchRequest) returns (RunBatchResponse);
+  rpc MultiRun(MultiRunRequest) returns (MultiRunResponse);
   rpc ListSessions(ListRequest) returns (ListResponse);
   rpc ListWindows(ListRequest) returns (ListResponse);
   rpc ListPanes(ListRequest) returns (ListResponse);

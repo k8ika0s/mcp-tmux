@@ -230,6 +230,34 @@ func (s *Service) RunBatch(ctx context.Context, req *tmuxproto.RunBatchRequest) 
 	return resp, nil
 }
 
+func (s *Service) MultiRun(ctx context.Context, req *tmuxproto.MultiRunRequest) (*tmuxproto.MultiRunResponse, error) {
+	if len(req.Steps) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "steps are required")
+	}
+	results := make([]*tmuxproto.MultiRunResult, 0, len(req.Steps))
+	for _, step := range req.Steps {
+		target, err := requireTarget(step.GetTarget())
+		if err != nil {
+			results = append(results, &tmuxproto.MultiRunResult{Target: step.GetTarget(), Error: err.Error()})
+			continue
+		}
+		if len(step.Args) == 0 {
+			results = append(results, &tmuxproto.MultiRunResult{Target: target, Error: "args are required"})
+			continue
+		}
+		out, runErr := tmux.Run(ctx, target.Host, s.tmuxBin, s.pathAdd, step.Args)
+		if runErr != nil {
+			results = append(results, &tmuxproto.MultiRunResult{Target: target, Error: runErr.Error()})
+			continue
+		}
+		if req.StripAnsi {
+			out = stripANSI(out)
+		}
+		results = append(results, &tmuxproto.MultiRunResult{Target: target, Text: out})
+	}
+	return &tmuxproto.MultiRunResponse{Results: results}, nil
+}
+
 func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
 	target, err := requireTarget(req.GetTarget())
 	if err != nil {
