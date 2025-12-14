@@ -163,6 +163,42 @@ func TestDefaultsResolution(t *testing.T) {
 	}
 }
 
+func TestHostProfileDefaults(t *testing.T) {
+	svc := NewServiceWithRunner("tmux", nil, (&fakeRunner{}).run, RunMeta{})
+	svc.hostProfiles = map[string]hostProfile{
+		"remote": {
+			DefaultSession: "hs",
+			DefaultPane:    "hs.1",
+			PathAdd:        []string{"/remote/bin"},
+			TmuxBin:        "/bin/tmux",
+		},
+	}
+	_, pane, err := svc.resolvePaneTarget(&tmuxproto.PaneRef{Host: "remote"})
+	if err != nil {
+		t.Fatalf("resolve with host profile: %v", err)
+	}
+	if pane != "hs.1" {
+		t.Fatalf("expected pane hs.1, got %s", pane)
+	}
+}
+
+func TestBatchCapture(t *testing.T) {
+	r := &fakeRunner{outputs: []string{"one", "two"}}
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
+	resp, err := svc.BatchCapture(context.Background(), &tmuxproto.BatchCaptureRequest{
+		Requests: []*tmuxproto.CapturePaneRequest{
+			{Target: &tmuxproto.PaneRef{Session: "s1"}},
+			{Target: &tmuxproto.PaneRef{Session: "s2"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BatchCapture error: %v", err)
+	}
+	if len(resp.Captures) != 2 {
+		t.Fatalf("expected 2 captures")
+	}
+}
+
 func TestMultiRunAggregates(t *testing.T) {
 	r := &fakeRunner{outputs: []string{"ok"}}
 	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})

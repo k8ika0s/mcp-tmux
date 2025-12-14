@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -37,10 +38,18 @@ type RunMeta struct {
 	RepoURL     string
 }
 
+type hostProfile struct {
+	PathAdd        []string `json:"pathAdd"`
+	TmuxBin        string   `json:"tmuxBin"`
+	DefaultSession string   `json:"defaultSession"`
+	DefaultPane    string   `json:"defaultPane"`
+}
+
 type Service struct {
 	tmuxBin       string
 	pathAdd       []string
 	meta          RunMeta
+	hostProfiles  map[string]hostProfile
 	defaultTarget *tmuxproto.PaneRef
 	run           func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
 	tmuxproto.UnimplementedTmuxServiceServer
@@ -55,9 +64,11 @@ func NewService(tmuxBin string, pathAdd []string) *Service {
 }
 
 func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error), meta RunMeta) *Service {
+	hp := loadHostProfiles()
 	return &Service{
 		tmuxBin: tmuxBin,
 		pathAdd: pathAdd,
+		hostProfiles: hp,
 		meta: RunMeta{
 			PackageName: meta.PackageName,
 			Version:     meta.Version,
@@ -72,6 +83,36 @@ func MakeRunnerWithMeta(meta RunMeta) func(ctx context.Context, host, tmuxBin st
 	return func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error) {
 		return tmux.Run(ctx, host, tmuxBin, pathAdd, args)
 	}
+}
+
+func (s *Service) runTmux(ctx context.Context, host string, args []string) (string, error) {
+	bin, pathAdd := s.tmuxBin, s.pathAdd
+	if hp, ok := s.hostProfiles[host]; ok {
+		if hp.TmuxBin != "" {
+			bin = hp.TmuxBin
+		}
+		if len(hp.PathAdd) > 0 {
+			pathAdd = append(pathAdd, hp.PathAdd...)
+		}
+	}
+	return s.run(ctx, host, bin, pathAdd, args)
+}
+
+func loadHostProfiles() map[string]hostProfile {
+	path := os.Getenv("MCP_TMUX_HOSTS_FILE")
+	if path == "" {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, ".config", "mcp-tmux", "hosts.json")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]hostProfile{}
+	}
+	var profiles map[string]hostProfile
+	if err := json.Unmarshal(data, &profiles); err != nil {
+		return map[string]hostProfile{}
+	}
+	return profiles
 }
 
 func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.TmuxService_StreamPaneServer) error {
@@ -128,7 +169,7 @@ func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, captureArgs)
+			out, err := s.runTmux(ctx, target.Host, captureArgs)
 			if err != nil {
 				return status.Errorf(codes.Internal, "capture failed: %v", err)
 			}
@@ -173,11 +214,11 @@ func (s *Service) Snapshot(ctx context.Context, req *tmuxproto.SnapshotRequest) 
 		captureLines = defaultCaptureLines
 	}
 
-	sessions, _ := s.run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-sessions"})
-	windows, _ := s.run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-windows"})
-	panes, _ := s.run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, []string{"list-panes"})
+	sessions, _ := s.runTmux(ctx, tgt.Host, []string{"list-sessions"})
+	windows, _ := s.runTmux(ctx, tgt.Host, []string{"list-windows"})
+	panes, _ := s.runTmux(ctx, tgt.Host, []string{"list-panes"})
 	captureArgs := []string{"capture-pane", "-pJ", "-S", fmt.Sprintf("-%d", captureLines)}
-	capture, _ := s.run(ctx, tgt.Host, s.tmuxBin, s.pathAdd, captureArgs)
+	capture, _ := s.runTmux(ctx, tgt.Host, captureArgs)
 
 	return &tmuxproto.SnapshotResponse{Sessions: sessions, Windows: windows, Panes: panes, Capture: capture}, nil
 }
@@ -192,7 +233,7 @@ func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneReq
 		lines = defaultCaptureLines
 	}
 	args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", lines)}
-	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.runTmux(ctx, target.Host, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "capture failed: %v", err)
 	}
@@ -232,7 +273,7 @@ func (s *Service) RunCommand(ctx context.Context, req *tmuxproto.RunCommandReque
 	if isDestructive(req.Args) && !req.Confirm {
 		return nil, status.Error(codes.InvalidArgument, "confirm=true required for destructive commands")
 	}
-	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, req.Args)
+	out, err := s.runTmux(ctx, target.Host, req.Args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tmux %v failed: %v", req.Args, err)
 	}
@@ -255,7 +296,7 @@ func (s *Service) SendKeys(ctx context.Context, req *tmuxproto.SendKeysRequest) 
 	if req.Enter {
 		args = append(args, "Enter")
 	}
-	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.runTmux(ctx, target.Host, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "send-keys failed: %v", err)
 	}
@@ -280,10 +321,10 @@ func (s *Service) RunBatch(ctx context.Context, req *tmuxproto.RunBatchRequest) 
 	cmd := strings.Join(req.Steps, fmt.Sprintf(" %s ", joiner))
 
 	if req.CleanPrompt {
-		_, _ = s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"send-keys", "-t", pane, "C-c", "C-u"})
+		_, _ = s.runTmux(ctx, target.Host, []string{"send-keys", "-t", pane, "C-c", "C-u"})
 	}
 
-	_, err = s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"send-keys", "-t", pane, cmd, "Enter"})
+	_, err = s.runTmux(ctx, target.Host, []string{"send-keys", "-t", pane, cmd, "Enter"})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "run batch failed: %v", err)
 	}
@@ -292,7 +333,7 @@ func (s *Service) RunBatch(ctx context.Context, req *tmuxproto.RunBatchRequest) 
 	if req.CaptureLines > 0 {
 		captureLines := req.CaptureLines
 		args := []string{"capture-pane", "-pJ", "-t", pane, "-S", fmt.Sprintf("-%d", captureLines)}
-		capOut, capErr := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+		capOut, capErr := s.runTmux(ctx, target.Host, args)
 		if capErr == nil {
 			if req.StripAnsi {
 				capOut = stripANSI(capOut)
@@ -321,7 +362,7 @@ func (s *Service) MultiRun(ctx context.Context, req *tmuxproto.MultiRunRequest) 
 			results = append(results, &tmuxproto.MultiRunResult{Target: target, Error: "args are required"})
 			continue
 		}
-		out, runErr := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, step.Args)
+		out, runErr := s.runTmux(ctx, target.Host, step.Args)
 		if runErr != nil {
 			results = append(results, &tmuxproto.MultiRunResult{Target: target, Error: runErr.Error()})
 			continue
@@ -343,7 +384,7 @@ func (s *Service) CaptureLayout(ctx context.Context, req *tmuxproto.CaptureLayou
 	if target.Session != "" {
 		args = append(args, "-t", target.Session)
 	}
-	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.runTmux(ctx, target.Host, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list-windows failed: %v", err)
 	}
@@ -378,7 +419,7 @@ func (s *Service) RestoreLayout(ctx context.Context, req *tmuxproto.RestoreLayou
 			continue
 		}
 		args := []string{"select-layout", "-t", l.Window, l.Layout}
-		if _, runErr := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args); runErr != nil {
+		if _, runErr := s.runTmux(ctx, target.Host, args); runErr != nil {
 			log.Printf("restore layout for %s failed: %v", l.Window, runErr)
 		}
 	}
@@ -397,11 +438,11 @@ func (s *Service) NewSession(ctx context.Context, req *tmuxproto.NewSessionReque
 	if req.Command != "" {
 		args = append(args, req.Command)
 	}
-	if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args); err != nil {
+	if _, err := s.runTmux(ctx, target.Host, args); err != nil {
 		return nil, status.Errorf(codes.Internal, "new-session failed: %v", err)
 	}
 	if req.Attach {
-		_, _ = s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"attach-session", "-t", target.Session})
+		_, _ = s.runTmux(ctx, target.Host, []string{"attach-session", "-t", target.Session})
 	}
 	return &tmuxproto.NewSessionResponse{Text: fmt.Sprintf("session %s created", target.Session)}, nil
 }
@@ -421,7 +462,7 @@ func (s *Service) NewWindow(ctx context.Context, req *tmuxproto.NewWindowRequest
 	if req.Command != "" {
 		args = append(args, req.Command)
 	}
-	if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args); err != nil {
+	if _, err := s.runTmux(ctx, target.Host, args); err != nil {
 		return nil, status.Errorf(codes.Internal, "new-window failed: %v", err)
 	}
 	return &tmuxproto.NewWindowResponse{Text: "window created"}, nil
@@ -440,7 +481,7 @@ func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) 
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"list-sessions"})
+	out, err := s.runTmux(ctx, target.Host, []string{"list-sessions"})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -456,7 +497,7 @@ func (s *Service) ListWindows(ctx context.Context, req *tmuxproto.ListRequest) (
 	if target.Session != "" {
 		args = append(args, "-t", target.Session)
 	}
-	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.runTmux(ctx, target.Host, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -472,7 +513,7 @@ func (s *Service) ListPanes(ctx context.Context, req *tmuxproto.ListRequest) (*t
 	if target.Session != "" {
 		args = append(args, "-t", target.Session)
 	}
-	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	out, err := s.runTmux(ctx, target.Host, args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
@@ -530,7 +571,7 @@ func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxServic
 	pipePath := filepath.Join(pipeDir, "pipe")
 	cleanup := func() {
 		if target.Host != "" {
-			_, _ = s.run(context.Background(), target.Host, s.tmuxBin, s.pathAdd, []string{"run-shell", fmt.Sprintf("rm -rf %s", pipeDir)})
+			_, _ = s.runTmux(context.Background(), target.Host, []string{"run-shell", fmt.Sprintf("rm -rf %s", pipeDir)})
 		} else {
 			_ = os.RemoveAll(pipeDir)
 		}
@@ -547,7 +588,7 @@ func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxServic
 			return err
 		}
 		startArgs := []string{"pipe-pane", "-t", pane, fmt.Sprintf("cat >> %s", pipePath)}
-		if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, startArgs); err != nil {
+		if _, err := s.runTmux(ctx, target.Host, startArgs); err != nil {
 			_ = os.RemoveAll(pipeDir)
 			return err
 		}
@@ -562,11 +603,11 @@ func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxServic
 			"run-shell",
 			fmt.Sprintf("mkdir -p %s && rm -f %s && mkfifo %s", pipeDir, pipePath, pipePath),
 		}
-		if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, start); err != nil {
+		if _, err := s.runTmux(ctx, target.Host, start); err != nil {
 			return err
 		}
 		pipeCmd := fmt.Sprintf("cat >> %s", pipePath)
-		if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"pipe-pane", "-t", pane, pipeCmd}); err != nil {
+		if _, err := s.runTmux(ctx, target.Host, []string{"pipe-pane", "-t", pane, pipeCmd}); err != nil {
 			cleanup()
 			return err
 		}
@@ -588,7 +629,7 @@ func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxServic
 	}
 	defer cleanup()
 
-	defer s.run(context.Background(), target.Host, s.tmuxBin, s.pathAdd, []string{"pipe-pane", "-t", pane})
+	defer s.runTmux(context.Background(), target.Host, []string{"pipe-pane", "-t", pane})
 
 	bufReader := bufio.NewReader(reader)
 
@@ -677,6 +718,17 @@ func (s *Service) resolvePaneTarget(target *tmuxproto.PaneRef) (*tmuxproto.PaneR
 	target, err := s.requireTarget(target)
 	if err != nil {
 		return nil, "", err
+	}
+	// clone to avoid mutating caller
+	t := *target
+	target = &t
+	if hp, ok := s.hostProfiles[target.Host]; ok {
+		if target.Session == "" && hp.DefaultSession != "" {
+			target.Session = hp.DefaultSession
+		}
+		if target.Pane == "" && hp.DefaultPane != "" {
+			target.Pane = hp.DefaultPane
+		}
 	}
 	pane := target.Pane
 	if pane == "" && target.Window != "" && target.Session != "" {
