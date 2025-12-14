@@ -318,6 +318,48 @@ func (s *Service) RestoreLayout(ctx context.Context, req *tmuxproto.RestoreLayou
 	return &tmuxproto.RestoreLayoutResponse{Text: "layouts applied"}, nil
 }
 
+func (s *Service) NewSession(ctx context.Context, req *tmuxproto.NewSessionRequest) (*tmuxproto.NewSessionResponse, error) {
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	if target.Session == "" {
+		return nil, status.Error(codes.InvalidArgument, "session is required")
+	}
+	args := []string{"new-session", "-d", "-s", target.Session}
+	if req.Command != "" {
+		args = append(args, req.Command)
+	}
+	if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args); err != nil {
+		return nil, status.Errorf(codes.Internal, "new-session failed: %v", err)
+	}
+	if req.Attach {
+		_, _ = s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, []string{"attach-session", "-t", target.Session})
+	}
+	return &tmuxproto.NewSessionResponse{Text: fmt.Sprintf("session %s created", target.Session)}, nil
+}
+
+func (s *Service) NewWindow(ctx context.Context, req *tmuxproto.NewWindowRequest) (*tmuxproto.NewWindowResponse, error) {
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	if target.Session == "" {
+		return nil, status.Error(codes.InvalidArgument, "session is required")
+	}
+	args := []string{"new-window", "-t", target.Session}
+	if req.Name != "" {
+		args = append(args, "-n", req.Name)
+	}
+	if req.Command != "" {
+		args = append(args, req.Command)
+	}
+	if _, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args); err != nil {
+		return nil, status.Errorf(codes.Internal, "new-window failed: %v", err)
+	}
+	return &tmuxproto.NewWindowResponse{Text: "window created"}, nil
+}
+
 func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
 	target, err := requireTarget(req.GetTarget())
 	if err != nil {

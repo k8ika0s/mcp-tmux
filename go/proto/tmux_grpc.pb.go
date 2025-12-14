@@ -28,6 +28,8 @@ const (
 	TmuxService_MultiRun_FullMethodName      = "/mcp.tmux.v1.TmuxService/MultiRun"
 	TmuxService_CaptureLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/CaptureLayout"
 	TmuxService_RestoreLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/RestoreLayout"
+	TmuxService_NewSession_FullMethodName    = "/mcp.tmux.v1.TmuxService/NewSession"
+	TmuxService_NewWindow_FullMethodName     = "/mcp.tmux.v1.TmuxService/NewWindow"
 	TmuxService_ListSessions_FullMethodName  = "/mcp.tmux.v1.TmuxService/ListSessions"
 	TmuxService_ListWindows_FullMethodName   = "/mcp.tmux.v1.TmuxService/ListWindows"
 	TmuxService_ListPanes_FullMethodName     = "/mcp.tmux.v1.TmuxService/ListPanes"
@@ -47,6 +49,8 @@ type TmuxServiceClient interface {
 	MultiRun(ctx context.Context, in *MultiRunRequest, opts ...grpc.CallOption) (*MultiRunResponse, error)
 	CaptureLayout(ctx context.Context, in *CaptureLayoutRequest, opts ...grpc.CallOption) (*CaptureLayoutResponse, error)
 	RestoreLayout(ctx context.Context, in *RestoreLayoutRequest, opts ...grpc.CallOption) (*RestoreLayoutResponse, error)
+	NewSession(ctx context.Context, in *NewSessionRequest, opts ...grpc.CallOption) (*NewSessionResponse, error)
+	NewWindow(ctx context.Context, in *NewWindowRequest, opts ...grpc.CallOption) (*NewWindowResponse, error)
 	ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListWindows(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListPanes(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
@@ -160,6 +164,26 @@ func (c *tmuxServiceClient) RestoreLayout(ctx context.Context, in *RestoreLayout
 	return out, nil
 }
 
+func (c *tmuxServiceClient) NewSession(ctx context.Context, in *NewSessionRequest, opts ...grpc.CallOption) (*NewSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NewSessionResponse)
+	err := c.cc.Invoke(ctx, TmuxService_NewSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tmuxServiceClient) NewWindow(ctx context.Context, in *NewWindowRequest, opts ...grpc.CallOption) (*NewWindowResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NewWindowResponse)
+	err := c.cc.Invoke(ctx, TmuxService_NewWindow_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tmuxServiceClient) ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListResponse)
@@ -213,6 +237,8 @@ type TmuxServiceServer interface {
 	MultiRun(context.Context, *MultiRunRequest) (*MultiRunResponse, error)
 	CaptureLayout(context.Context, *CaptureLayoutRequest) (*CaptureLayoutResponse, error)
 	RestoreLayout(context.Context, *RestoreLayoutRequest) (*RestoreLayoutResponse, error)
+	NewSession(context.Context, *NewSessionRequest) (*NewSessionResponse, error)
+	NewWindow(context.Context, *NewWindowRequest) (*NewWindowResponse, error)
 	ListSessions(context.Context, *ListRequest) (*ListResponse, error)
 	ListWindows(context.Context, *ListRequest) (*ListResponse, error)
 	ListPanes(context.Context, *ListRequest) (*ListResponse, error)
@@ -253,6 +279,12 @@ func (UnimplementedTmuxServiceServer) CaptureLayout(context.Context, *CaptureLay
 }
 func (UnimplementedTmuxServiceServer) RestoreLayout(context.Context, *RestoreLayoutRequest) (*RestoreLayoutResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RestoreLayout not implemented")
+}
+func (UnimplementedTmuxServiceServer) NewSession(context.Context, *NewSessionRequest) (*NewSessionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NewSession not implemented")
+}
+func (UnimplementedTmuxServiceServer) NewWindow(context.Context, *NewWindowRequest) (*NewWindowResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NewWindow not implemented")
 }
 func (UnimplementedTmuxServiceServer) ListSessions(context.Context, *ListRequest) (*ListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSessions not implemented")
@@ -442,6 +474,42 @@ func _TmuxService_RestoreLayout_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TmuxService_NewSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NewSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).NewSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_NewSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).NewSession(ctx, req.(*NewSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TmuxService_NewWindow_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NewWindowRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).NewWindow(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_NewWindow_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).NewWindow(ctx, req.(*NewWindowRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TmuxService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListRequest)
 	if err := dec(in); err != nil {
@@ -552,6 +620,14 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RestoreLayout",
 			Handler:    _TmuxService_RestoreLayout_Handler,
+		},
+		{
+			MethodName: "NewSession",
+			Handler:    _TmuxService_NewSession_Handler,
+		},
+		{
+			MethodName: "NewWindow",
+			Handler:    _TmuxService_NewWindow_Handler,
 		},
 		{
 			MethodName: "ListSessions",

@@ -127,6 +127,22 @@ message RestoreLayoutRequest {
 
 message RestoreLayoutResponse { string text = 1; }
 
+message NewSessionRequest {
+  PaneRef target = 1;          // session and host used; window/pane ignored
+  bool attach = 2;             // attach after create
+  string command = 3;          // optional command to run in session
+}
+
+message NewSessionResponse { string text = 1; }
+
+message NewWindowRequest {
+  PaneRef target = 1;          // requires session
+  string name = 2;
+  string command = 3;
+}
+
+message NewWindowResponse { string text = 1; }
+
 service TmuxService {
   rpc StreamPane(StreamPaneRequest) returns (stream PaneChunk);
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
@@ -137,6 +153,8 @@ service TmuxService {
   rpc MultiRun(MultiRunRequest) returns (MultiRunResponse);
   rpc CaptureLayout(CaptureLayoutRequest) returns (CaptureLayoutResponse);
   rpc RestoreLayout(RestoreLayoutRequest) returns (RestoreLayoutResponse);
+  rpc NewSession(NewSessionRequest) returns (NewSessionResponse);
+  rpc NewWindow(NewWindowRequest) returns (NewWindowResponse);
   rpc ListSessions(ListRequest) returns (ListResponse);
   rpc ListWindows(ListRequest) returns (ListResponse);
   rpc ListPanes(ListRequest) returns (ListResponse);

@@ -165,6 +165,33 @@ func TestCaptureAndRestoreLayout(t *testing.T) {
 	}
 }
 
+func TestNewSessionAndWindow(t *testing.T) {
+	r := &fakeRunner{}
+	svc := NewServiceWithRunner("tmux", nil, r.run)
+	if _, err := svc.NewSession(context.Background(), &tmuxproto.NewSessionRequest{
+		Target:  &tmuxproto.PaneRef{Session: "s"},
+		Command: "echo hi",
+	}); err != nil {
+		t.Fatalf("NewSession error: %v", err)
+	}
+	if len(r.calls) != 1 || r.calls[0][0] != "new-session" {
+		t.Fatalf("unexpected new-session call: %v", r.calls)
+	}
+
+	r2 := &fakeRunner{}
+	svc2 := NewServiceWithRunner("tmux", nil, r2.run)
+	if _, err := svc2.NewWindow(context.Background(), &tmuxproto.NewWindowRequest{
+		Target:  &tmuxproto.PaneRef{Session: "s"},
+		Name:    "win",
+		Command: "pwd",
+	}); err != nil {
+		t.Fatalf("NewWindow error: %v", err)
+	}
+	if len(r2.calls) != 1 || r2.calls[0][0] != "new-window" {
+		t.Fatalf("unexpected new-window call: %v", r2.calls)
+	}
+}
+
 type stubStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
