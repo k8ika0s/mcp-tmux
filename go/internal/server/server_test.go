@@ -46,6 +46,7 @@ func TestSendKeysValidations(t *testing.T) {
 func TestSendKeysEnterOnly(t *testing.T) {
 	r := &fakeRunner{}
 	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
+	svc.cleanPromptDefault = false
 	resp, err := svc.SendKeys(context.Background(), &tmuxproto.SendKeysRequest{
 		Target: &tmuxproto.PaneRef{Session: "s"},
 		Enter:  true,

@@ -105,6 +105,10 @@ message SendKeysRequest {
   PaneRef target = 1;
   repeated string keys = 2;
   bool enter = 3;
+  bool clean_prompt = 4;
+  bool verify_prompt = 5;
+  bool force = 6;
+  bool confirm = 7;
 }
 
 message SendKeysResponse { string text = 1; }
@@ -116,6 +120,9 @@ message RunBatchRequest {
   bool clean_prompt = 4;       // send C-c/C-u before running
   bool strip_ansi = 5;
   int32 capture_lines = 6;     // optional capture after run (0 = skip)
+  bool verify_prompt = 7;      // ensure prompt is empty before send
+  bool force = 8;              // skip prompt verification failure
+  bool confirm = 9;            // required for destructive steps
 }
 
 message RunBatchResponse {

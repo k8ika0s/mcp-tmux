@@ -112,18 +112,21 @@ type cachedList struct {
 }
 
 type Service struct {
-	tmuxBin       string
-	pathAdd       []string
-	meta          RunMeta
-	hostProfiles  map[string]hostProfile
-	defaultsPath  string
-	layoutsPath   string
-	layoutStore   layoutStore
-	defaultTarget *tmuxproto.PaneRef
-	cleanPromptDefault bool
-	listCache          map[string]map[string]cachedList
-	listTTL            time.Duration
-	run           func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
+	tmuxBin             string
+	pathAdd             []string
+	meta                RunMeta
+	hostProfiles        map[string]hostProfile
+	defaultsPath        string
+	layoutsPath         string
+	layoutStore         layoutStore
+	defaultTarget       *tmuxproto.PaneRef
+	cleanPromptDefault  bool
+	promptVerifyDefault bool
+	confirmSendsDefault bool
+	confirmRunDefault   bool
+	listCache           map[string]map[string]cachedList
+	listTTL             time.Duration
+	run                 func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
 	tmuxproto.UnimplementedTmuxServiceServer
 }
 
@@ -141,6 +144,12 @@ func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx cont
 	layoutPath, layoutProfiles := loadLayouts()
 	cleanPrompt := os.Getenv("MCP_TMUX_CLEAN_PROMPT")
 	cleanPromptDefault := !(strings.ToLower(cleanPrompt) == "false" || cleanPrompt == "0")
+	promptVerify := os.Getenv("MCP_TMUX_PROMPT_VERIFY")
+	promptVerifyDefault := strings.ToLower(promptVerify) == "true" || promptVerify == "1"
+	confirmSends := os.Getenv("MCP_TMUX_CONFIRM_SENDS")
+	confirmSendsDefault := strings.ToLower(confirmSends) == "true" || confirmSends == "1"
+	confirmRun := os.Getenv("MCP_TMUX_CONFIRM_RUN")
+	confirmRunDefault := !(strings.ToLower(confirmRun) == "false" || confirmRun == "0")
 	listTTL := time.Second
 	if ttlStr := os.Getenv("MCP_TMUX_LIST_TTL_MS"); ttlStr != "" {
 		if v, err := time.ParseDuration(ttlStr + "ms"); err == nil && v > 0 {
@@ -148,16 +157,19 @@ func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx cont
 		}
 	}
 	return &Service{
-		tmuxBin:       tmuxBin,
-		pathAdd:       pathAdd,
-		hostProfiles:  hp,
-		defaultsPath:  defPath,
-		layoutsPath:   layoutPath,
-		defaultTarget: defTarget,
-		cleanPromptDefault: cleanPromptDefault,
-		listCache:          map[string]map[string]cachedList{},
-		listTTL:            listTTL,
-		layoutStore:   layoutProfiles,
+		tmuxBin:             tmuxBin,
+		pathAdd:             pathAdd,
+		hostProfiles:        hp,
+		defaultsPath:        defPath,
+		layoutsPath:         layoutPath,
+		defaultTarget:       defTarget,
+		cleanPromptDefault:  cleanPromptDefault,
+		promptVerifyDefault: promptVerifyDefault,
+		confirmSendsDefault: confirmSendsDefault,
+		confirmRunDefault:   confirmRunDefault,
+		listCache:           map[string]map[string]cachedList{},
+		listTTL:             listTTL,
+		layoutStore:         layoutProfiles,
 		meta: RunMeta{
 			PackageName: meta.PackageName,
 			Version:     meta.Version,
@@ -521,7 +533,7 @@ func (s *Service) RunCommand(ctx context.Context, req *tmuxproto.RunCommandReque
 	if len(req.Args) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "args are required")
 	}
-	if isDestructive(req.Args) && !req.Confirm {
+	if s.confirmRunDefault && isDestructive(req.Args) && !req.Confirm {
 		return nil, status.Error(codes.InvalidArgument, "confirm=true required for destructive commands")
 	}
 	out, err := s.runTmux(ctx, target.Host, req.Args)
@@ -542,10 +554,23 @@ func (s *Service) SendKeys(ctx context.Context, req *tmuxproto.SendKeysRequest) 
 	if len(req.Keys) == 0 && !req.Enter {
 		return nil, status.Error(codes.InvalidArgument, "keys or enter required")
 	}
+	clean := req.CleanPrompt || s.cleanPromptDefault
+	verify := req.VerifyPrompt || s.promptVerifyDefault
+	if verify {
+		if err := s.verifyPromptEmpty(ctx, target.Host, pane, req.Force); err != nil {
+			return nil, err
+		}
+	}
 	args := []string{"send-keys", "-t", pane}
 	args = append(args, req.Keys...)
 	if req.Enter {
 		args = append(args, "Enter")
+	}
+	if clean {
+		_, _ = s.runTmux(ctx, target.Host, []string{"send-keys", "-t", pane, "C-c", "C-u"})
+	}
+	if s.confirmSendsDefault && (isDestructiveTokens(req.Keys) || req.Enter && len(req.Keys) == 0) && !req.Confirm {
+		return nil, status.Error(codes.InvalidArgument, "confirm=true required for potentially destructive send")
 	}
 	out, err := s.runTmux(ctx, target.Host, args)
 	if err != nil {
@@ -571,8 +596,20 @@ func (s *Service) RunBatch(ctx context.Context, req *tmuxproto.RunBatchRequest) 
 	}
 	cmd := strings.Join(req.Steps, fmt.Sprintf(" %s ", joiner))
 
-	if req.CleanPrompt {
+	clean := req.CleanPrompt || s.cleanPromptDefault
+	verify := req.VerifyPrompt || s.promptVerifyDefault
+	if verify {
+		if err := s.verifyPromptEmpty(ctx, target.Host, pane, req.Force); err != nil {
+			return nil, err
+		}
+	}
+
+	if clean {
 		_, _ = s.runTmux(ctx, target.Host, []string{"send-keys", "-t", pane, "C-c", "C-u"})
+	}
+
+	if s.confirmRunDefault && isDestructiveText(cmd) && !req.Confirm {
+		return nil, status.Error(codes.InvalidArgument, "confirm=true required for destructive batch")
 	}
 
 	_, err = s.runTmux(ctx, target.Host, []string{"send-keys", "-t", pane, cmd, "Enter"})
@@ -873,6 +910,35 @@ func isDestructive(args []string) bool {
 		}
 	}
 	return false
+}
+
+func isDestructiveText(s string) bool {
+	l := strings.ToLower(s)
+	bad := []string{
+		"rm -rf", "shutdown", "reboot", ":q!", "kill-server", "kill-session", "kill-window", "kill-pane", "unlink-window", "unlink-pane",
+	}
+	for _, b := range bad {
+		if strings.Contains(l, b) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDestructiveTokens(keys []string) bool {
+	return isDestructiveText(strings.Join(keys, " "))
+}
+
+func (s *Service) verifyPromptEmpty(ctx context.Context, host, pane string, force bool) error {
+	args := []string{"capture-pane", "-pJ", "-t", pane, "-S", "-1", "-N", "1"}
+	out, err := s.runTmux(ctx, host, args)
+	if err != nil {
+		return status.Errorf(codes.Internal, "prompt verify failed: %v", err)
+	}
+	if strings.TrimSpace(out) != "" && !force {
+		return status.Error(codes.FailedPrecondition, "prompt not empty; set force=true to override")
+	}
+	return nil
 }
 
 func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxService_StreamPaneServer, target *tmuxproto.PaneRef, pane string, strip bool, maxBytes uint32, interval time.Duration, startSeq uint64) error {
