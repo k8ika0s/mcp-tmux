@@ -118,6 +118,26 @@ func TestRunCommandStripANSI(t *testing.T) {
 	}
 }
 
+func TestRunCommandDestructiveGuard(t *testing.T) {
+	r := &fakeRunner{}
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
+	_, err := svc.RunCommand(context.Background(), &tmuxproto.RunCommandRequest{
+		Target: &tmuxproto.PaneRef{Session: "s"},
+		Args:   []string{"kill-session"},
+	})
+	if err == nil {
+		t.Fatalf("expected error for destructive without confirm")
+	}
+	_, err = svc.RunCommand(context.Background(), &tmuxproto.RunCommandRequest{
+		Target:  &tmuxproto.PaneRef{Session: "s"},
+		Args:    []string{"kill-session"},
+		Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("expected success when confirmed: %v", err)
+	}
+}
+
 func TestMultiRunAggregates(t *testing.T) {
 	r := &fakeRunner{outputs: []string{"ok"}}
 	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})

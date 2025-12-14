@@ -213,6 +213,9 @@ func (s *Service) RunCommand(ctx context.Context, req *tmuxproto.RunCommandReque
 	if len(req.Args) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "args are required")
 	}
+	if isDestructive(req.Args) && !req.Confirm {
+		return nil, status.Error(codes.InvalidArgument, "confirm=true required for destructive commands")
+	}
 	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, req.Args)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tmux %v failed: %v", req.Args, err)
@@ -477,6 +480,32 @@ func stripANSI(s string) string {
 
 func syscallMkfifo(path string, mode uint32) error {
 	return unix.Mkfifo(path, mode)
+}
+
+func isDestructive(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	destructive := map[string]bool{
+		"kill-session":  true,
+		"kill-window":   true,
+		"kill-pane":     true,
+		"kill-server":   true,
+		"unlink-window": true,
+		"unlink-pane":   true,
+	}
+	verb := args[0]
+	if destructive[verb] {
+		return true
+	}
+	if verb == "attach-session" {
+		for _, a := range args {
+			if a == "-k" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) streamViaPipe(ctx context.Context, stream tmuxproto.TmuxService_StreamPaneServer, target *tmuxproto.PaneRef, pane string, strip bool, maxBytes uint32, interval time.Duration, startSeq uint64) error {

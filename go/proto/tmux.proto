@@ -63,6 +63,7 @@ message RunCommandRequest {
   PaneRef target = 1;
   repeated string args = 2;
   bool strip_ansi = 3;
+  bool confirm = 4;            // required for destructive commands
 }
 
 message RunCommandResponse { string text = 1; }
