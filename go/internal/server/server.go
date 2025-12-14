@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
@@ -264,6 +265,57 @@ func (s *Service) MultiRun(ctx context.Context, req *tmuxproto.MultiRunRequest) 
 		results = append(results, &tmuxproto.MultiRunResult{Target: target, Text: out})
 	}
 	return &tmuxproto.MultiRunResponse{Results: results}, nil
+}
+
+func (s *Service) CaptureLayout(ctx context.Context, req *tmuxproto.CaptureLayoutRequest) (*tmuxproto.CaptureLayoutResponse, error) {
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"list-windows", "-F", "#{window_id}\t#{window_layout}"}
+	if target.Session != "" {
+		args = append(args, "-t", target.Session)
+	}
+	out, err := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list-windows failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	layouts := make([]*tmuxproto.WindowLayout, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		layouts = append(layouts, &tmuxproto.WindowLayout{
+			Window: parts[0],
+			Layout: parts[1],
+		})
+	}
+	return &tmuxproto.CaptureLayoutResponse{Layouts: layouts}, nil
+}
+
+func (s *Service) RestoreLayout(ctx context.Context, req *tmuxproto.RestoreLayoutRequest) (*tmuxproto.RestoreLayoutResponse, error) {
+	target, err := requireTarget(req.GetTarget())
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Layouts) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "layouts are required")
+	}
+	for _, l := range req.Layouts {
+		if l == nil || l.Window == "" || l.Layout == "" {
+			continue
+		}
+		args := []string{"select-layout", "-t", l.Window, l.Layout}
+		if _, runErr := s.run(ctx, target.Host, s.tmuxBin, s.pathAdd, args); runErr != nil {
+			log.Printf("restore layout for %s failed: %v", l.Window, runErr)
+		}
+	}
+	return &tmuxproto.RestoreLayoutResponse{Text: "layouts applied"}, nil
 }
 
 func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {

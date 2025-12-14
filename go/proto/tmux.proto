@@ -109,6 +109,24 @@ message MultiRunResponse {
   repeated MultiRunResult results = 1;
 }
 
+message CaptureLayoutRequest { PaneRef target = 1; }
+
+message WindowLayout {
+  string window = 1;
+  string layout = 2;
+}
+
+message CaptureLayoutResponse {
+  repeated WindowLayout layouts = 1;
+}
+
+message RestoreLayoutRequest {
+  PaneRef target = 1;
+  repeated WindowLayout layouts = 2;
+}
+
+message RestoreLayoutResponse { string text = 1; }
+
 service TmuxService {
   rpc StreamPane(StreamPaneRequest) returns (stream PaneChunk);
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
@@ -117,6 +135,8 @@ service TmuxService {
   rpc SendKeys(SendKeysRequest) returns (SendKeysResponse);
   rpc RunBatch(RunBatchRequest) returns (RunBatchResponse);
   rpc MultiRun(MultiRunRequest) returns (MultiRunResponse);
+  rpc CaptureLayout(CaptureLayoutRequest) returns (CaptureLayoutResponse);
+  rpc RestoreLayout(RestoreLayoutRequest) returns (RestoreLayoutResponse);
   rpc ListSessions(ListRequest) returns (ListResponse);
   rpc ListWindows(ListRequest) returns (ListResponse);
   rpc ListPanes(ListRequest) returns (ListResponse);

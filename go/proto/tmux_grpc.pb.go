@@ -19,17 +19,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TmuxService_StreamPane_FullMethodName   = "/mcp.tmux.v1.TmuxService/StreamPane"
-	TmuxService_Snapshot_FullMethodName     = "/mcp.tmux.v1.TmuxService/Snapshot"
-	TmuxService_CapturePane_FullMethodName  = "/mcp.tmux.v1.TmuxService/CapturePane"
-	TmuxService_RunCommand_FullMethodName   = "/mcp.tmux.v1.TmuxService/RunCommand"
-	TmuxService_SendKeys_FullMethodName     = "/mcp.tmux.v1.TmuxService/SendKeys"
-	TmuxService_RunBatch_FullMethodName     = "/mcp.tmux.v1.TmuxService/RunBatch"
-	TmuxService_MultiRun_FullMethodName     = "/mcp.tmux.v1.TmuxService/MultiRun"
-	TmuxService_ListSessions_FullMethodName = "/mcp.tmux.v1.TmuxService/ListSessions"
-	TmuxService_ListWindows_FullMethodName  = "/mcp.tmux.v1.TmuxService/ListWindows"
-	TmuxService_ListPanes_FullMethodName    = "/mcp.tmux.v1.TmuxService/ListPanes"
-	TmuxService_SetDefault_FullMethodName   = "/mcp.tmux.v1.TmuxService/SetDefault"
+	TmuxService_StreamPane_FullMethodName    = "/mcp.tmux.v1.TmuxService/StreamPane"
+	TmuxService_Snapshot_FullMethodName      = "/mcp.tmux.v1.TmuxService/Snapshot"
+	TmuxService_CapturePane_FullMethodName   = "/mcp.tmux.v1.TmuxService/CapturePane"
+	TmuxService_RunCommand_FullMethodName    = "/mcp.tmux.v1.TmuxService/RunCommand"
+	TmuxService_SendKeys_FullMethodName      = "/mcp.tmux.v1.TmuxService/SendKeys"
+	TmuxService_RunBatch_FullMethodName      = "/mcp.tmux.v1.TmuxService/RunBatch"
+	TmuxService_MultiRun_FullMethodName      = "/mcp.tmux.v1.TmuxService/MultiRun"
+	TmuxService_CaptureLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/CaptureLayout"
+	TmuxService_RestoreLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/RestoreLayout"
+	TmuxService_ListSessions_FullMethodName  = "/mcp.tmux.v1.TmuxService/ListSessions"
+	TmuxService_ListWindows_FullMethodName   = "/mcp.tmux.v1.TmuxService/ListWindows"
+	TmuxService_ListPanes_FullMethodName     = "/mcp.tmux.v1.TmuxService/ListPanes"
+	TmuxService_SetDefault_FullMethodName    = "/mcp.tmux.v1.TmuxService/SetDefault"
 )
 
 // TmuxServiceClient is the client API for TmuxService service.
@@ -43,6 +45,8 @@ type TmuxServiceClient interface {
 	SendKeys(ctx context.Context, in *SendKeysRequest, opts ...grpc.CallOption) (*SendKeysResponse, error)
 	RunBatch(ctx context.Context, in *RunBatchRequest, opts ...grpc.CallOption) (*RunBatchResponse, error)
 	MultiRun(ctx context.Context, in *MultiRunRequest, opts ...grpc.CallOption) (*MultiRunResponse, error)
+	CaptureLayout(ctx context.Context, in *CaptureLayoutRequest, opts ...grpc.CallOption) (*CaptureLayoutResponse, error)
+	RestoreLayout(ctx context.Context, in *RestoreLayoutRequest, opts ...grpc.CallOption) (*RestoreLayoutResponse, error)
 	ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListWindows(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListPanes(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
@@ -136,6 +140,26 @@ func (c *tmuxServiceClient) MultiRun(ctx context.Context, in *MultiRunRequest, o
 	return out, nil
 }
 
+func (c *tmuxServiceClient) CaptureLayout(ctx context.Context, in *CaptureLayoutRequest, opts ...grpc.CallOption) (*CaptureLayoutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CaptureLayoutResponse)
+	err := c.cc.Invoke(ctx, TmuxService_CaptureLayout_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tmuxServiceClient) RestoreLayout(ctx context.Context, in *RestoreLayoutRequest, opts ...grpc.CallOption) (*RestoreLayoutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestoreLayoutResponse)
+	err := c.cc.Invoke(ctx, TmuxService_RestoreLayout_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tmuxServiceClient) ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListResponse)
@@ -187,6 +211,8 @@ type TmuxServiceServer interface {
 	SendKeys(context.Context, *SendKeysRequest) (*SendKeysResponse, error)
 	RunBatch(context.Context, *RunBatchRequest) (*RunBatchResponse, error)
 	MultiRun(context.Context, *MultiRunRequest) (*MultiRunResponse, error)
+	CaptureLayout(context.Context, *CaptureLayoutRequest) (*CaptureLayoutResponse, error)
+	RestoreLayout(context.Context, *RestoreLayoutRequest) (*RestoreLayoutResponse, error)
 	ListSessions(context.Context, *ListRequest) (*ListResponse, error)
 	ListWindows(context.Context, *ListRequest) (*ListResponse, error)
 	ListPanes(context.Context, *ListRequest) (*ListResponse, error)
@@ -221,6 +247,12 @@ func (UnimplementedTmuxServiceServer) RunBatch(context.Context, *RunBatchRequest
 }
 func (UnimplementedTmuxServiceServer) MultiRun(context.Context, *MultiRunRequest) (*MultiRunResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MultiRun not implemented")
+}
+func (UnimplementedTmuxServiceServer) CaptureLayout(context.Context, *CaptureLayoutRequest) (*CaptureLayoutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CaptureLayout not implemented")
+}
+func (UnimplementedTmuxServiceServer) RestoreLayout(context.Context, *RestoreLayoutRequest) (*RestoreLayoutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RestoreLayout not implemented")
 }
 func (UnimplementedTmuxServiceServer) ListSessions(context.Context, *ListRequest) (*ListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSessions not implemented")
@@ -374,6 +406,42 @@ func _TmuxService_MultiRun_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TmuxService_CaptureLayout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CaptureLayoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).CaptureLayout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_CaptureLayout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).CaptureLayout(ctx, req.(*CaptureLayoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TmuxService_RestoreLayout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreLayoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).RestoreLayout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_RestoreLayout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).RestoreLayout(ctx, req.(*RestoreLayoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TmuxService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListRequest)
 	if err := dec(in); err != nil {
@@ -476,6 +544,14 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MultiRun",
 			Handler:    _TmuxService_MultiRun_Handler,
+		},
+		{
+			MethodName: "CaptureLayout",
+			Handler:    _TmuxService_CaptureLayout_Handler,
+		},
+		{
+			MethodName: "RestoreLayout",
+			Handler:    _TmuxService_RestoreLayout_Handler,
 		},
 		{
 			MethodName: "ListSessions",

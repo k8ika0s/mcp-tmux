@@ -138,6 +138,33 @@ func TestMultiRunAggregates(t *testing.T) {
 	}
 }
 
+func TestCaptureAndRestoreLayout(t *testing.T) {
+	r := &fakeRunner{outputs: []string{"@1\tdeadbeef\n@2\tcafebabe"}}
+	svc := NewServiceWithRunner("tmux", nil, r.run)
+	capResp, err := svc.CaptureLayout(context.Background(), &tmuxproto.CaptureLayoutRequest{
+		Target: &tmuxproto.PaneRef{Session: "s"},
+	})
+	if err != nil {
+		t.Fatalf("CaptureLayout error: %v", err)
+	}
+	if len(capResp.Layouts) != 2 {
+		t.Fatalf("expected 2 layouts, got %d", len(capResp.Layouts))
+	}
+
+	restoreRunner := &fakeRunner{}
+	svc2 := NewServiceWithRunner("tmux", nil, restoreRunner.run)
+	_, err = svc2.RestoreLayout(context.Background(), &tmuxproto.RestoreLayoutRequest{
+		Target:  &tmuxproto.PaneRef{Session: "s"},
+		Layouts: capResp.Layouts,
+	})
+	if err != nil {
+		t.Fatalf("RestoreLayout error: %v", err)
+	}
+	if len(restoreRunner.calls) != 2 {
+		t.Fatalf("expected 2 layout apply calls, got %d", len(restoreRunner.calls))
+	}
+}
+
 type stubStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
