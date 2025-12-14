@@ -106,6 +106,10 @@ type defaultTargetStore struct {
 }
 
 type layoutStore map[string][]tmuxproto.WindowLayout
+type cachedList struct {
+	text string
+	exp  time.Time
+}
 
 type Service struct {
 	tmuxBin       string
@@ -116,6 +120,9 @@ type Service struct {
 	layoutsPath   string
 	layoutStore   layoutStore
 	defaultTarget *tmuxproto.PaneRef
+	cleanPromptDefault bool
+	listCache          map[string]map[string]cachedList
+	listTTL            time.Duration
 	run           func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
 	tmuxproto.UnimplementedTmuxServiceServer
 }
@@ -132,6 +139,14 @@ func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx cont
 	hp := loadHostProfiles()
 	defPath, defTarget := loadDefaultTarget()
 	layoutPath, layoutProfiles := loadLayouts()
+	cleanPrompt := os.Getenv("MCP_TMUX_CLEAN_PROMPT")
+	cleanPromptDefault := !(strings.ToLower(cleanPrompt) == "false" || cleanPrompt == "0")
+	listTTL := time.Second
+	if ttlStr := os.Getenv("MCP_TMUX_LIST_TTL_MS"); ttlStr != "" {
+		if v, err := time.ParseDuration(ttlStr + "ms"); err == nil && v > 0 {
+			listTTL = v
+		}
+	}
 	return &Service{
 		tmuxBin:       tmuxBin,
 		pathAdd:       pathAdd,
@@ -139,6 +154,9 @@ func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx cont
 		defaultsPath:  defPath,
 		layoutsPath:   layoutPath,
 		defaultTarget: defTarget,
+		cleanPromptDefault: cleanPromptDefault,
+		listCache:          map[string]map[string]cachedList{},
+		listTTL:            listTTL,
 		layoutStore:   layoutProfiles,
 		meta: RunMeta{
 			PackageName: meta.PackageName,

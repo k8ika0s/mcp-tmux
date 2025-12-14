@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"time"
 
 	tmuxproto "github.com/k8ika0s/mcp-tmux/go/proto"
@@ -53,6 +54,7 @@ func (a auditConfig) streamAudit() grpc.StreamServerInterceptor {
 }
 
 func (a auditConfig) log(method string, req interface{}, start time.Time, err error, stream bool) {
+	reqID := randID()
 	statusText := "ok"
 	statusColor := colorGreen
 	if err != nil {
@@ -71,6 +73,7 @@ func (a auditConfig) log(method string, req interface{}, start time.Time, err er
 	if a.json {
 		entry := map[string]interface{}{
 			"ts":     time.Now().Format(time.RFC3339),
+			"req_id": reqID,
 			"method": method,
 			"target": target,
 			"status": statusText,
@@ -86,8 +89,9 @@ func (a auditConfig) log(method string, req interface{}, start time.Time, err er
 			return
 		}
 	}
-	msg := fmt.Sprintf("%s %s (%s) %s%s%s%s",
+	msg := fmt.Sprintf("%s req=%s %s (%s) %s%s%s%s",
 		time.Now().Format(time.RFC3339),
+		reqID,
 		method,
 		target,
 		a.wrap(statusColor, statusText),
@@ -136,6 +140,10 @@ func argsSummary(req interface{}) string {
 		return fmt.Sprintf(" state captures=%d", len(v.Targets))
 	}
 	return ""
+}
+
+func randID() string {
+	return fmt.Sprintf("%08x", rand.Uint32())
 }
 
 func grpcStatus(err error) string {
