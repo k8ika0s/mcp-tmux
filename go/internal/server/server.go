@@ -219,8 +219,12 @@ func (s *Service) Snapshot(ctx context.Context, req *tmuxproto.SnapshotRequest) 
 	panes, _ := s.runTmux(ctx, tgt.Host, []string{"list-panes"})
 	captureArgs := []string{"capture-pane", "-pJ", "-S", fmt.Sprintf("-%d", captureLines)}
 	capture, _ := s.runTmux(ctx, tgt.Host, captureArgs)
+	trunc := false
+	if strings.Count(capture, "\n")+1 >= int(captureLines) {
+		trunc = true
+	}
 
-	return &tmuxproto.SnapshotResponse{Sessions: sessions, Windows: windows, Panes: panes, Capture: capture}, nil
+	return &tmuxproto.SnapshotResponse{Sessions: sessions, Windows: windows, Panes: panes, Capture: capture, CaptureTruncated: trunc}, nil
 }
 
 func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneRequest) (*tmuxproto.CapturePaneResponse, error) {
@@ -248,7 +252,7 @@ func (s *Service) CapturePane(ctx context.Context, req *tmuxproto.CapturePaneReq
 	if lineCount := strings.Count(out, "\n") + 1; int32(lineCount) >= lines {
 		truncated = true
 	}
-	return &tmuxproto.CapturePaneResponse{Target: target, Text: out, Truncated: truncated}, nil
+	return &tmuxproto.CapturePaneResponse{Target: target, Text: out, Truncated: truncated, RequestedLines: uint32(lines)}, nil
 }
 
 func (s *Service) BatchCapture(ctx context.Context, req *tmuxproto.BatchCaptureRequest) (*tmuxproto.BatchCaptureResponse, error) {
