@@ -30,6 +30,7 @@ const (
 	TmuxService_RestoreLayout_FullMethodName = "/mcp.tmux.v1.TmuxService/RestoreLayout"
 	TmuxService_NewSession_FullMethodName    = "/mcp.tmux.v1.TmuxService/NewSession"
 	TmuxService_NewWindow_FullMethodName     = "/mcp.tmux.v1.TmuxService/NewWindow"
+	TmuxService_ServerInfo_FullMethodName    = "/mcp.tmux.v1.TmuxService/ServerInfo"
 	TmuxService_ListSessions_FullMethodName  = "/mcp.tmux.v1.TmuxService/ListSessions"
 	TmuxService_ListWindows_FullMethodName   = "/mcp.tmux.v1.TmuxService/ListWindows"
 	TmuxService_ListPanes_FullMethodName     = "/mcp.tmux.v1.TmuxService/ListPanes"
@@ -51,6 +52,7 @@ type TmuxServiceClient interface {
 	RestoreLayout(ctx context.Context, in *RestoreLayoutRequest, opts ...grpc.CallOption) (*RestoreLayoutResponse, error)
 	NewSession(ctx context.Context, in *NewSessionRequest, opts ...grpc.CallOption) (*NewSessionResponse, error)
 	NewWindow(ctx context.Context, in *NewWindowRequest, opts ...grpc.CallOption) (*NewWindowResponse, error)
+	ServerInfo(ctx context.Context, in *ServerInfoRequest, opts ...grpc.CallOption) (*ServerInfoResponse, error)
 	ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListWindows(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	ListPanes(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
@@ -184,6 +186,16 @@ func (c *tmuxServiceClient) NewWindow(ctx context.Context, in *NewWindowRequest,
 	return out, nil
 }
 
+func (c *tmuxServiceClient) ServerInfo(ctx context.Context, in *ServerInfoRequest, opts ...grpc.CallOption) (*ServerInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServerInfoResponse)
+	err := c.cc.Invoke(ctx, TmuxService_ServerInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tmuxServiceClient) ListSessions(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListResponse)
@@ -239,6 +251,7 @@ type TmuxServiceServer interface {
 	RestoreLayout(context.Context, *RestoreLayoutRequest) (*RestoreLayoutResponse, error)
 	NewSession(context.Context, *NewSessionRequest) (*NewSessionResponse, error)
 	NewWindow(context.Context, *NewWindowRequest) (*NewWindowResponse, error)
+	ServerInfo(context.Context, *ServerInfoRequest) (*ServerInfoResponse, error)
 	ListSessions(context.Context, *ListRequest) (*ListResponse, error)
 	ListWindows(context.Context, *ListRequest) (*ListResponse, error)
 	ListPanes(context.Context, *ListRequest) (*ListResponse, error)
@@ -285,6 +298,9 @@ func (UnimplementedTmuxServiceServer) NewSession(context.Context, *NewSessionReq
 }
 func (UnimplementedTmuxServiceServer) NewWindow(context.Context, *NewWindowRequest) (*NewWindowResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NewWindow not implemented")
+}
+func (UnimplementedTmuxServiceServer) ServerInfo(context.Context, *ServerInfoRequest) (*ServerInfoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ServerInfo not implemented")
 }
 func (UnimplementedTmuxServiceServer) ListSessions(context.Context, *ListRequest) (*ListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListSessions not implemented")
@@ -510,6 +526,24 @@ func _TmuxService_NewWindow_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TmuxService_ServerInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServerInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TmuxServiceServer).ServerInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TmuxService_ServerInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TmuxServiceServer).ServerInfo(ctx, req.(*ServerInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TmuxService_ListSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListRequest)
 	if err := dec(in); err != nil {
@@ -628,6 +662,10 @@ var TmuxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "NewWindow",
 			Handler:    _TmuxService_NewWindow_Handler,
+		},
+		{
+			MethodName: "ServerInfo",
+			Handler:    _TmuxService_ServerInfo_Handler,
 		},
 		{
 			MethodName: "ListSessions",

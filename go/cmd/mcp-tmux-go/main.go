@@ -20,6 +20,9 @@ func main() {
 	tmuxBin := flag.String("tmux", "tmux", "tmux binary")
 	pathAdd := flag.String("path-add", "/opt/homebrew/bin:/usr/local/bin:/usr/bin", "extra PATH entries (colon-separated)")
 	enableReflection := flag.Bool("reflection", true, "enable gRPC reflection")
+	pkgName := flag.String("pkg", "github.com/k8ika0s/mcp-tmux", "package name to report in ServerInfo")
+	version := flag.String("version", "dev", "version to report in ServerInfo")
+	repo := flag.String("repo", "https://github.com/k8ika0s/mcp-tmux", "repo URL to report in ServerInfo")
 	flag.Parse()
 
 	lis, err := net.Listen("tcp", *addr)
@@ -28,7 +31,12 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer()
-	svc := server.NewService(*tmuxBin, strings.Split(*pathAdd, ":"))
+	meta := server.RunMeta{
+		PackageName: *pkgName,
+		Version:     *version,
+		RepoURL:     *repo,
+	}
+	svc := server.NewServiceWithRunner(*tmuxBin, strings.Split(*pathAdd, ":"), server.MakeRunnerWithMeta(meta), meta)
 	tmuxproto.RegisterTmuxServiceServer(grpcServer, svc)
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)

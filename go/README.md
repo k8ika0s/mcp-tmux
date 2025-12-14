@@ -39,5 +39,6 @@ protoc --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. pr
 - `CaptureLayout` / `RestoreLayout`: snapshot and re-apply window layouts.
 - `NewSession` / `NewWindow`: create sessions/windows (optionally run a command or attach).
 - Health + reflection: the gRPC server exposes standard health checks and (by default) reflection for easier local integration.
+- `ServerInfo`: returns package name/version/repo for verification from clients.
 
 Notes: StreamPane still uses `capture-pane` polling; swapping to `pipe-pane` tailing would provide near-real-time streaming. Auth/z-audit still to be added to mirror the Node MCP server.

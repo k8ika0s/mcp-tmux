@@ -144,6 +144,14 @@ message NewWindowRequest {
 
 message NewWindowResponse { string text = 1; }
 
+message ServerInfoRequest {}
+
+message ServerInfoResponse {
+  string package_name = 1;
+  string version = 2;
+  string repo_url = 3;
+}
+
 service TmuxService {
   rpc StreamPane(StreamPaneRequest) returns (stream PaneChunk);
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
@@ -156,6 +164,7 @@ service TmuxService {
   rpc RestoreLayout(RestoreLayoutRequest) returns (RestoreLayoutResponse);
   rpc NewSession(NewSessionRequest) returns (NewSessionResponse);
   rpc NewWindow(NewWindowRequest) returns (NewWindowResponse);
+  rpc ServerInfo(ServerInfoRequest) returns (ServerInfoResponse);
   rpc ListSessions(ListRequest) returns (ListResponse);
   rpc ListWindows(ListRequest) returns (ListResponse);
   rpc ListPanes(ListRequest) returns (ListResponse);

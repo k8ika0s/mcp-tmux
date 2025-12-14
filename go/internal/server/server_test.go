@@ -33,7 +33,7 @@ func (f *fakeRunner) run(ctx context.Context, host, tmuxBin string, pathAdd []st
 }
 
 func TestSendKeysValidations(t *testing.T) {
-	svc := NewServiceWithRunner("tmux", nil, (&fakeRunner{}).run)
+	svc := NewServiceWithRunner("tmux", nil, (&fakeRunner{}).run, RunMeta{})
 	_, err := svc.SendKeys(context.Background(), &tmuxproto.SendKeysRequest{
 		Target: &tmuxproto.PaneRef{Session: "s"},
 	})
@@ -44,7 +44,7 @@ func TestSendKeysValidations(t *testing.T) {
 
 func TestSendKeysEnterOnly(t *testing.T) {
 	r := &fakeRunner{}
-	svc := NewServiceWithRunner("tmux", nil, r.run)
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	resp, err := svc.SendKeys(context.Background(), &tmuxproto.SendKeysRequest{
 		Target: &tmuxproto.PaneRef{Session: "s"},
 		Enter:  true,
@@ -66,7 +66,7 @@ func TestSendKeysEnterOnly(t *testing.T) {
 
 func TestRunBatchJoinAndClean(t *testing.T) {
 	r := &fakeRunner{}
-	svc := NewServiceWithRunner("tmux", nil, r.run)
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	_, err := svc.RunBatch(context.Background(), &tmuxproto.RunBatchRequest{
 		Target:      &tmuxproto.PaneRef{Session: "s"},
 		Steps:       []string{"echo 1", "echo 2"},
@@ -88,7 +88,7 @@ func TestRunBatchJoinAndClean(t *testing.T) {
 
 func TestRunBatchCaptureTruncated(t *testing.T) {
 	r := &fakeRunner{outputs: []string{"ok", "line1\nline2\nline3"}}
-	svc := NewServiceWithRunner("tmux", nil, r.run)
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	resp, err := svc.RunBatch(context.Background(), &tmuxproto.RunBatchRequest{
 		Target:       &tmuxproto.PaneRef{Session: "s"},
 		Steps:        []string{"echo hi"},
@@ -104,7 +104,7 @@ func TestRunBatchCaptureTruncated(t *testing.T) {
 
 func TestRunCommandStripANSI(t *testing.T) {
 	r := &fakeRunner{outputs: []string{"\x1b[31mred\x1b[0m"}}
-	svc := NewServiceWithRunner("tmux", nil, r.run)
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	resp, err := svc.RunCommand(context.Background(), &tmuxproto.RunCommandRequest{
 		Target:    &tmuxproto.PaneRef{Session: "s"},
 		Args:      []string{"display-message"},
@@ -120,7 +120,7 @@ func TestRunCommandStripANSI(t *testing.T) {
 
 func TestMultiRunAggregates(t *testing.T) {
 	r := &fakeRunner{outputs: []string{"ok"}}
-	svc := NewServiceWithRunner("tmux", nil, r.run)
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	resp, err := svc.MultiRun(context.Background(), &tmuxproto.MultiRunRequest{
 		Steps: []*tmuxproto.MultiRunStep{
 			{Target: &tmuxproto.PaneRef{Session: "s"}, Args: []string{"list-sessions"}},
@@ -140,7 +140,7 @@ func TestMultiRunAggregates(t *testing.T) {
 
 func TestCaptureAndRestoreLayout(t *testing.T) {
 	r := &fakeRunner{outputs: []string{"@1\tdeadbeef\n@2\tcafebabe"}}
-	svc := NewServiceWithRunner("tmux", nil, r.run)
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	capResp, err := svc.CaptureLayout(context.Background(), &tmuxproto.CaptureLayoutRequest{
 		Target: &tmuxproto.PaneRef{Session: "s"},
 	})
@@ -152,7 +152,7 @@ func TestCaptureAndRestoreLayout(t *testing.T) {
 	}
 
 	restoreRunner := &fakeRunner{}
-	svc2 := NewServiceWithRunner("tmux", nil, restoreRunner.run)
+	svc2 := NewServiceWithRunner("tmux", nil, restoreRunner.run, RunMeta{})
 	_, err = svc2.RestoreLayout(context.Background(), &tmuxproto.RestoreLayoutRequest{
 		Target:  &tmuxproto.PaneRef{Session: "s"},
 		Layouts: capResp.Layouts,
@@ -167,7 +167,7 @@ func TestCaptureAndRestoreLayout(t *testing.T) {
 
 func TestNewSessionAndWindow(t *testing.T) {
 	r := &fakeRunner{}
-	svc := NewServiceWithRunner("tmux", nil, r.run)
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	if _, err := svc.NewSession(context.Background(), &tmuxproto.NewSessionRequest{
 		Target:  &tmuxproto.PaneRef{Session: "s"},
 		Command: "echo hi",
@@ -179,7 +179,7 @@ func TestNewSessionAndWindow(t *testing.T) {
 	}
 
 	r2 := &fakeRunner{}
-	svc2 := NewServiceWithRunner("tmux", nil, r2.run)
+	svc2 := NewServiceWithRunner("tmux", nil, r2.run, RunMeta{})
 	if _, err := svc2.NewWindow(context.Background(), &tmuxproto.NewWindowRequest{
 		Target:  &tmuxproto.PaneRef{Session: "s"},
 		Name:    "win",
@@ -225,7 +225,7 @@ func TestStreamPaneDelta(t *testing.T) {
 	}()
 
 	r := &fakeRunner{outputs: []string{"", "foo", "foobar"}}
-	svc := NewServiceWithRunner("tmux", nil, r.run)
+	svc := NewServiceWithRunner("tmux", nil, r.run, RunMeta{})
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &stubStream{ctx: ctx, cancel: cancel}
 	err := svc.StreamPane(&tmuxproto.StreamPaneRequest{
@@ -240,6 +240,18 @@ func TestStreamPaneDelta(t *testing.T) {
 	}
 	if string(stream.msgs[0].Data) != "foo" || string(stream.msgs[1].Data) != "bar" {
 		t.Fatalf("unexpected deltas: %q %q", stream.msgs[0].Data, stream.msgs[1].Data)
+	}
+}
+
+func TestServerInfoMeta(t *testing.T) {
+	meta := RunMeta{PackageName: "pkg", Version: "1.2.3", RepoURL: "https://example.com"}
+	svc := NewServiceWithRunner("tmux", nil, (&fakeRunner{}).run, meta)
+	resp, err := svc.ServerInfo(context.Background(), &tmuxproto.ServerInfoRequest{})
+	if err != nil {
+		t.Fatalf("ServerInfo error: %v", err)
+	}
+	if resp.PackageName != meta.PackageName || resp.Version != meta.Version || resp.RepoUrl != meta.RepoURL {
+		t.Fatalf("server info mismatch: %+v", resp)
 	}
 }
 

@@ -31,19 +31,46 @@ var (
 )
 
 // Service implements tmuxproto.TmuxServiceServer.
+type RunMeta struct {
+	PackageName string
+	Version     string
+	RepoURL     string
+}
+
 type Service struct {
 	tmuxBin string
 	pathAdd []string
+	meta    RunMeta
 	run     func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)
 	tmuxproto.UnimplementedTmuxServiceServer
 }
 
 func NewService(tmuxBin string, pathAdd []string) *Service {
-	return NewServiceWithRunner(tmuxBin, pathAdd, tmux.Run)
+	return NewServiceWithRunner(tmuxBin, pathAdd, tmux.Run, RunMeta{
+		PackageName: "github.com/k8ika0s/mcp-tmux/go",
+		Version:     "dev",
+		RepoURL:     "https://github.com/k8ika0s/mcp-tmux",
+	})
 }
 
-func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error)) *Service {
-	return &Service{tmuxBin: tmuxBin, pathAdd: pathAdd, run: runner}
+func NewServiceWithRunner(tmuxBin string, pathAdd []string, runner func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error), meta RunMeta) *Service {
+	return &Service{
+		tmuxBin: tmuxBin,
+		pathAdd: pathAdd,
+		meta: RunMeta{
+			PackageName: meta.PackageName,
+			Version:     meta.Version,
+			RepoURL:     meta.RepoURL,
+		},
+		run: runner,
+	}
+}
+
+// MakeRunnerWithMeta wraps tmux.Run with metadata for convenience.
+func MakeRunnerWithMeta(meta RunMeta) func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error) {
+	return func(ctx context.Context, host, tmuxBin string, pathAdd []string, args []string) (string, error) {
+		return tmux.Run(ctx, host, tmuxBin, pathAdd, args)
+	}
 }
 
 func (s *Service) StreamPane(req *tmuxproto.StreamPaneRequest, stream tmuxproto.TmuxService_StreamPaneServer) error {
@@ -379,6 +406,14 @@ func (s *Service) NewWindow(ctx context.Context, req *tmuxproto.NewWindowRequest
 		return nil, status.Errorf(codes.Internal, "new-window failed: %v", err)
 	}
 	return &tmuxproto.NewWindowResponse{Text: "window created"}, nil
+}
+
+func (s *Service) ServerInfo(ctx context.Context, req *tmuxproto.ServerInfoRequest) (*tmuxproto.ServerInfoResponse, error) {
+	return &tmuxproto.ServerInfoResponse{
+		PackageName: s.meta.PackageName,
+		Version:     s.meta.Version,
+		RepoUrl:     s.meta.RepoURL,
+	}, nil
 }
 
 func (s *Service) ListSessions(ctx context.Context, req *tmuxproto.ListRequest) (*tmuxproto.ListResponse, error) {
